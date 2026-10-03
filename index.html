@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Web Game Template</title>
+  <link rel="icon" href="data:,">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #0a111b; color: #cfd8dc; font-family: system-ui, sans-serif; overflow: hidden; }
+    /* 列は minmax(0, 1fr)。こうしないと、中身が広い時に列が画面の幅より広がる */
+    #app { position: fixed; inset: 0; display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); }
+    #hud { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; font-size: 14px; }
+    #mute { background: #1c2e45; color: inherit; border: 1px solid #3d6090; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+    /* stage は canvas の大きさに左右されない寸法を持つ（kit/scale の前提） */
+    #stage { position: relative; min-height: 0; }
+    #game { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); touch-action: none; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="hud"><span id="status"></span><button id="mute" type="button"></button></div>
+    <div id="stage"><canvas id="game"></canvas></div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
