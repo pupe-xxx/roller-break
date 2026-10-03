@@ -1,49 +1,103 @@
 import { describe, expect, it } from 'vitest';
-import { applyMove, createInitialState, legalMoves, winnerOf } from '../src/game/rules';
-import { playGame, playMany } from '../src/game/sim';
+import { boardCells, dirTo, hexDist } from '../src/game/hex';
+import { LEVELS } from '../src/game/levels';
+import { createState, fire, starsOf, type Level } from '../src/game/rules';
+import { solve } from '../src/game/solve';
 
-describe('ルール', () => {
-  it('最初は9マスすべてに打てて、先手の番', () => {
-    const s = createInitialState();
-    expect(legalMoves(s)).toHaveLength(9);
-    expect(s.turn).toBe('p1');
+const level = (over: Partial<Level>): Level => ({ radius: 2, rollers: [[-2, 0]], targets: [], walls: [], heavy: 0, par: 1, ...over });
+const EAST = 0;
+
+describe('六角形の盤', () => {
+  it('半径2の盤は19マス、半径3は37マス', () => {
+    expect(boardCells(2)).toHaveLength(19);
+    expect(boardCells(3)).toHaveLength(37);
   });
 
-  it('打つと番が替わり、元の状態は変わらない', () => {
-    const s = createInitialState();
-    const next = applyMove(s, 4);
-    expect(next.board[4]).toBe('p1');
-    expect(next.turn).toBe('p2');
-    expect(s.board[4]).toBeNull();
-  });
-
-  it('埋まっているマスには打てない', () => {
-    const s = applyMove(createInitialState(), 4);
-    expect(applyMove(s, 4)).toBe(s);
-  });
-
-  it('1列そろうと勝ち、全部埋まると引き分け', () => {
-    expect(winnerOf(['p1', 'p1', 'p1', null, 'p2', 'p2', null, null, null])).toBe('p1');
-    expect(winnerOf(['p1', 'p2', 'p1', 'p1', 'p2', 'p2', 'p2', 'p1', 'p1'])).toBe('draw');
-    expect(winnerOf(['p1', null, null, null, null, null, null, null, null])).toBeNull();
+  it('まっすぐ先にあるマスだけ向きが決まる', () => {
+    expect(dirTo([0, 0], [3, 0])).toBe(0);
+    expect(dirTo([0, 0], [-2, 2])).toBe(4);
+    expect(dirTo([0, 0], [1, 1])).toBe(-1);
+    expect(dirTo([0, 0], [0, 0])).toBe(-1);
+    expect(hexDist([0, 0], [2, -1])).toBe(2);
   });
 });
 
-describe('画面なしの CPU 対戦', () => {
-  it('同じ種なら同じ試合になる', () => {
-    expect(playGame(42)).toEqual(playGame(42));
+describe('発射', () => {
+  it('軽いタイヤは、最初の的を倒して止まる', () => {
+    const s = createState(level({ targets: [[-1, 0], [1, 0]] }));
+    const result = fire(s, { roller: 0, dir: EAST, kind: 'light' })!;
+    expect(result.state.targets).toEqual(['1,0']);
+    expect(result.end).toBe('target');
+    expect(s.targets).toHaveLength(2); // 元の状態は変わらない
   });
 
-  it('どの試合も決着まで進み、打った手はすべて別のマス', () => {
-    for (let seed = 1; seed <= 200; seed++) {
-      const { winner, moves } = playGame(seed);
-      expect(['p1', 'p2', 'draw']).toContain(winner);
-      expect(new Set(moves).size).toBe(moves.length);
-    }
+  it('重いタイヤは、的を倒しながら盤の外まで進む', () => {
+    const s = createState(level({ targets: [[-1, 0], [1, 0]], heavy: 1 }));
+    const result = fire(s, { roller: 0, dir: EAST, kind: 'heavy' })!;
+    expect(result.state.targets).toEqual([]);
+    expect(result.state.heavyLeft).toBe(0);
+    expect(result.end).toBe('out');
+    expect(result.state.status).toBe('cleared');
   });
 
-  it('勝敗の合計が試合数と合う', () => {
-    const tally = playMany(100);
-    expect(tally.p1 + tally.p2 + tally.draw).toBe(100);
+  it('重いタイヤが残っていなければ撃てない', () => {
+    const s = createState(level({ targets: [[1, 0]] }));
+    expect(fire(s, { roller: 0, dir: EAST, kind: 'heavy' })).toBeNull();
+  });
+
+  it('壁に当たると1段削って止まる。2段の壁は2発で無くなる', () => {
+    const s = createState(level({ targets: [[1, 0]], walls: [[0, 0, 2]], heavy: 1, par: 3 }));
+    const first = fire(s, { roller: 0, dir: EAST, kind: 'heavy' })!;
+    expect(first.end).toBe('wall');
+    expect(first.state.walls).toEqual({ '0,0': 1 });
+    expect(first.state.targets).toEqual(['1,0']);
+    const second = fire(first.state, { roller: 0, dir: EAST, kind: 'light' })!;
+    expect(second.state.walls).toEqual({});
+    const third = fire(second.state, { roller: 0, dir: EAST, kind: 'light' })!;
+    expect(third.state.status).toBe('cleared');
+  });
+
+  it('ほかの転師に当たると止まる', () => {
+    const s = createState(level({ rollers: [[-2, 0], [0, 0]], targets: [[1, 0]] }));
+    const result = fire(s, { roller: 0, dir: EAST, kind: 'light' })!;
+    expect(result.end).toBe('roller');
+    expect(result.state.targets).toEqual(['1,0']);
+  });
+
+  it('発射数を使い切ると失敗になり、それ以上撃てない', () => {
+    let s = createState(level({ targets: [[1, 0]], par: 1 }), 2);
+    s = fire(s, { roller: 0, dir: 3, kind: 'light' })!.state;
+    expect(s.status).toBe('playing');
+    s = fire(s, { roller: 0, dir: 3, kind: 'light' })!.state;
+    expect(s.status).toBe('failed');
+    expect(fire(s, { roller: 0, dir: EAST, kind: 'light' })).toBeNull();
+  });
+
+  it('最少の発射数なら星3つ、1発多いと2つ、それより多いと1つ', () => {
+    const cleared = createState(level({ par: 3 }));
+    expect(starsOf({ ...cleared, status: 'cleared', shots: 3 })).toBe(3);
+    expect(starsOf({ ...cleared, status: 'cleared', shots: 4 })).toBe(2);
+    expect(starsOf({ ...cleared, status: 'cleared', shots: 5 })).toBe(1);
+    expect(starsOf({ ...cleared, status: 'failed', shots: 5 })).toBe(0);
+  });
+});
+
+describe('ステージ', () => {
+  it('20 ステージ以上ある', () => {
+    expect(LEVELS.length).toBeGreaterThanOrEqual(20);
+  });
+
+  it('どのステージも解けて、par が最少の発射数と合っている', () => {
+    LEVELS.forEach((l, i) => {
+      const best = solve(l, l.par);
+      expect(best?.shots.length, `ステージ ${i + 1}`).toBe(l.par);
+    });
+  });
+
+  it('転師・的・壁が同じマスに重なっていない', () => {
+    LEVELS.forEach((l, i) => {
+      const keys = [...l.rollers, ...l.targets, ...l.walls].map(([q, r]) => `${q},${r}`);
+      expect(new Set(keys).size, `ステージ ${i + 1}`).toBe(keys.length);
+    });
   });
 });

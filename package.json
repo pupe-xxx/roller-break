@@ -1,5 +1,5 @@
 {
-  "name": "web-game-template",
+  "name": "roller-break",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.game.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "sim": "tsx scripts/sim.ts",
+    "gen": "tsx scripts/gen.ts",
     "record": "tsx scripts/record.ts"
   },
   "devDependencies": {

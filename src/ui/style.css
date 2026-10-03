@@ -1,0 +1,37 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #0a111b; color: #cfd8dc; font-family: system-ui, sans-serif; overflow: hidden; }
+button { font: inherit; color: inherit; background: #1c2e45; border: 1px solid #3d6090; border-radius: 8px; padding: 8px 14px; cursor: pointer; touch-action: manipulation; }
+button:disabled { opacity: 0.4; cursor: default; }
+button.selected { background: var(--accent); border-color: var(--accent); color: #0a111b; font-weight: 700; }
+[hidden] { display: none !important; }
+
+/* 列は minmax(0, 1fr)。こうしないと、中身が広い時に列が画面の幅より広がる */
+#app { position: fixed; inset: 0; display: grid; grid-template-rows: auto auto 1fr auto; grid-template-columns: minmax(0, 1fr); max-width: 720px; margin: 0 auto; }
+#hud { display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-size: 15px; }
+#hud button { padding: 6px 10px; }
+#stageLabel { font-weight: 700; white-space: nowrap; }
+#counter { margin-left: auto; margin-right: 4px; font-size: 13px; text-align: right; }
+#hint { margin: 0; padding: 0 12px 6px; min-height: 1.5em; font-size: 14px; color: var(--accent); text-align: center; }
+/* stage は canvas の大きさに左右されない寸法を持つ（kit/scale の前提） */
+#stage { position: relative; min-height: 0; }
+#game { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); touch-action: none; }
+#tools { display: flex; justify-content: center; gap: 10px; padding: 8px 10px 14px; min-height: 60px; }
+#tools button { min-width: 110px; padding: 10px 14px; }
+
+.screen { position: absolute; inset: 0; background: #0a111b; display: flex; flex-direction: column; align-items: center; padding: 24px 16px; overflow-y: auto; }
+#title { margin: 8px 0 4px; font-size: 32px; letter-spacing: 0.06em; color: var(--accent); }
+#howto { margin: 0 0 6px; max-width: 30em; text-align: center; font-size: 15px; line-height: 1.6; }
+#total { margin: 0 0 16px; color: #ffd54f; }
+#levels { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; width: 100%; max-width: 420px; }
+#levels button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 0; }
+#levels b { font-size: 20px; }
+#levels span { font-size: 12px; color: #ffd54f; letter-spacing: 0.1em; }
+
+/* 結果は下から出す。盤の最後の形が見えるように、画面を全部は覆わない */
+#result { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(13, 24, 38, 0.96); border-top: 2px solid var(--accent); padding: 16px 16px 22px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+#result.failed { border-top-color: #ef5350; }
+#resultTitle { margin: 0; font-size: 26px; }
+#resultStars { font-size: 34px; color: #ffd54f; letter-spacing: 0.15em; min-height: 1em; }
+#resultNote { margin: 0 0 8px; font-size: 14px; }
+#result .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+#resultNext { background: var(--accent); border-color: var(--accent); color: #0a111b; font-weight: 700; }
