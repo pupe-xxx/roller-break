@@ -47,8 +47,8 @@ export interface ShotResult {
   end: 'out' | 'wall' | 'target' | 'roller';
 }
 
-/** ★3 の発射数より、何発多く撃てるか */
-export const EXTRA_SHOTS = 2;
+/** ★3 の発射数より、何発多く撃てるか。余裕が多いと、考えずに撃っても倒しきれてしまう */
+export const EXTRA_SHOTS = 1;
 
 export function createState(level: Level, limit: number = level.par + EXTRA_SHOTS): State {
   return {
@@ -127,10 +127,8 @@ export function fire(state: State, shot: Shot): ShotResult | null {
   };
 }
 
-/** クリアした時の星の数 */
+/** クリアした時の星の数。最少の発射数なら3つ、1発多いと2つ（それより多くは撃てない） */
 export function starsOf(state: State): number {
   if (state.status !== 'cleared') return 0;
-  if (state.shots <= state.par) return 3;
-  if (state.shots === state.par + 1) return 2;
-  return 1;
+  return state.shots <= state.par ? 3 : 2;
 }

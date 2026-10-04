@@ -73,12 +73,12 @@ describe('発射', () => {
     expect(fire(s, { roller: 0, dir: EAST, kind: 'light' })).toBeNull();
   });
 
-  it('最少の発射数なら星3つ、1発多いと2つ、それより多いと1つ', () => {
+  it('最少の発射数なら星3つ、1発多いと2つ。撃てるのは最少より1発多くまで', () => {
     const cleared = createState(level({ par: 3 }));
+    expect(cleared.limit).toBe(4);
     expect(starsOf({ ...cleared, status: 'cleared', shots: 3 })).toBe(3);
     expect(starsOf({ ...cleared, status: 'cleared', shots: 4 })).toBe(2);
-    expect(starsOf({ ...cleared, status: 'cleared', shots: 5 })).toBe(1);
-    expect(starsOf({ ...cleared, status: 'failed', shots: 5 })).toBe(0);
+    expect(starsOf({ ...cleared, status: 'failed', shots: 4 })).toBe(0);
   });
 });
 
