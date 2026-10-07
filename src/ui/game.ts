@@ -334,11 +334,12 @@ export const game: GameDef<State, ShotResult> = {
   failText: () => t('タイヤを使い切りました', 'Out of tires'),
 
   buttons(state) {
-    // 残りの数は、ボタンに書く。重いタイヤも1発に数えるので、残りの発射数より多くは撃てない
+    // 残りの数は、ボタンに書く。軽いタイヤの数は、あと何発撃てるか（重いタイヤも、その1発に数える）。
+    // 重いタイヤの数は、持っている数をそのまま書く（残りの発射数に合わせて減らすと、使っていないのに減って見える）
     const left = state.limit - state.shots;
     const light = { id: 'light', label: t(`軽いタイヤ ×${left}`, `Light tire ×${left}`), selected: kind === 'light' };
     if (LEVELS[levelIndex].heavy === 0) return [light];
-    const heavy = Math.min(state.heavyLeft, left);
+    const heavy = state.heavyLeft;
     return [light, { id: 'heavy', label: t(`重いタイヤ ×${heavy}`, `Heavy tire ×${heavy}`), selected: kind === 'heavy', disabled: heavy === 0 }];
   },
   press(state, id) {
