@@ -9,9 +9,9 @@ import type { Anim, GameDef } from './shell';
 // 論理サイズ。描画はすべてこの座標で書く（実際の大きさは kit/scale が合わせる）
 const VIEW = { width: 720, height: 720 } as const;
 const COLORS = {
-  bg: '#0a111b', cell: '#1c2e45', cellAlt: '#152236', grid: '#2a4060', aim: 'rgba(255,138,80,0.16)',
-  wall: '#546e7a', wall2: '#90a4ae', target: '#ef5350', targetRing: '#ffebee',
-  roller: '#ff8a50', rollerDark: '#3e2416', select: '#ffe082', tire: '#263238',
+  bg: '#0a111b', cell: '#16243a', grid: '#22344f', aim: 'rgba(255,224,130,0.55)',
+  wall: '#7d8fa3', wallEdge: '#4a5a6e', wall2: '#dfe7ef', target: '#ff3d3d', targetRing: '#ffffff',
+  roller: '#ffd54f', rollerIdle: '#9c8a55', rollerDark: '#2b2410', select: '#ffe082', tire: '#263238',
 } as const;
 
 const HINTS: [ja: string, en: string][] = [
@@ -32,7 +32,8 @@ function drawBoard(ctx: CanvasRenderingContext2D, layout: HexLayout, state: Stat
   for (const [q, r] of boardCells(state.radius)) {
     const { x, y } = centerOf(layout, [q, r]);
     hexPath(ctx, x, y, layout.size, 0.96);
-    ctx.fillStyle = ((q - r) % 3 + 3) % 3 === 0 ? COLORS.cellAlt : COLORS.cell;
+    // マスは1色にする（2色に塗り分けると、壁や狙いの線と見分けにくい）
+    ctx.fillStyle = COLORS.cell;
     ctx.fill();
     ctx.strokeStyle = COLORS.grid;
     ctx.lineWidth = 2;
@@ -40,19 +41,43 @@ function drawBoard(ctx: CanvasRenderingContext2D, layout: HexLayout, state: Stat
   }
 }
 
-/** 選んでいる転師から撃てる6本の線を、うっすら見せる */
+/**
+ * 選んでいる転師から撃てる6本の線を見せる。線は、今選んでいるタイヤが止まる所（壁・的・ほかの転師）まで引く。
+ * 何かに当たる線は、止まるマスに輪を付ける。何にも当たらない線は、盤の端まで薄く引く。
+ */
 function drawAim(ctx: CanvasRenderingContext2D, layout: HexLayout, state: State): void {
   const from = state.rollers[selected];
   if (from === undefined) return;
-  const [fq, fr] = hexOf(from);
-  ctx.fillStyle = COLORS.aim;
-  for (const [dq, dr] of DIRS) {
-    for (let q = fq + dq, r = fr + dr; inBoard(q, r, state.radius); q += dq, r += dr) {
-      const { x, y } = centerOf(layout, [q, r]);
-      hexPath(ctx, x, y, layout.size, 0.96);
-      ctx.fill();
+  const start = centerOf(layout, hexOf(from));
+  ctx.lineCap = 'round';
+  for (let dir = 0; dir < DIRS.length; dir++) {
+    const shot = fire(state, { roller: selected, dir, kind });
+    if (!shot || shot.path.length < 2 && shot.end === 'out') continue;
+    const hits = shot.end !== 'out' || shot.hitAt.length > 0;
+    // 盤の外に出た時は、最後のマス（盤の外）の1つ手前まで
+    const last = shot.end === 'out' ? shot.path[shot.path.length - 2] : shot.path[shot.path.length - 1];
+    if (!last) continue;
+    const end = centerOf(layout, last);
+    ctx.globalAlpha = hits ? 1 : 0.3;
+    ctx.strokeStyle = COLORS.aim;
+    ctx.lineWidth = hits ? 5 : 3;
+    ctx.setLineDash(hits ? [] : [3, 11]);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // 当たる物（最後に止まる物と、重いタイヤが貫く的）に輪を付ける
+    const marks = shot.hitAt.map((k) => shot.path[k]);
+    if (shot.end === 'wall' || shot.end === 'roller') marks.push(last);
+    for (const cell of marks) {
+      const { x, y } = centerOf(layout, cell);
+      hexPath(ctx, x, y, layout.size, 0.9);
+      ctx.lineWidth = 4;
+      ctx.stroke();
     }
   }
+  ctx.globalAlpha = 1;
 }
 
 function drawWall(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, stage: number): void {
@@ -60,6 +85,9 @@ function drawWall(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, s
   hexPath(ctx, x, y, layout.size, 0.84);
   ctx.fillStyle = COLORS.wall;
   ctx.fill();
+  ctx.strokeStyle = COLORS.wallEdge;
+  ctx.lineWidth = 4;
+  ctx.stroke();
   if (stage >= 2) {
     hexPath(ctx, x, y, layout.size, 0.52);
     ctx.fillStyle = COLORS.wall2;
@@ -69,26 +97,24 @@ function drawWall(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, s
 
 function drawTarget(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex): void {
   const { x, y } = centerOf(layout, cell);
-  [0.56, 0.38, 0.18].forEach((scale, i) => {
+  // 白いふちを付けて、暗い盤の上でも一目で見つかるようにする
+  [0.66, 0.56, 0.36, 0.17].forEach((scale, i) => {
     ctx.beginPath();
     ctx.arc(x, y, layout.size * scale, 0, Math.PI * 2);
-    ctx.fillStyle = i === 1 ? COLORS.targetRing : COLORS.target;
+    ctx.fillStyle = i % 2 === 0 ? COLORS.targetRing : COLORS.target;
     ctx.fill();
   });
 }
 
+/** 転師は六角形の台で描く（的は丸なので、形でも見分けられる）。選んでいない転師は色を落とす */
 function drawRoller(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, active: boolean): void {
   const { x, y } = centerOf(layout, cell);
-  if (active) {
-    hexPath(ctx, x, y, layout.size, 0.92);
-    ctx.strokeStyle = COLORS.select;
-    ctx.lineWidth = 5;
-    ctx.stroke();
-  }
-  ctx.beginPath();
-  ctx.arc(x, y, layout.size * 0.56, 0, Math.PI * 2);
-  ctx.fillStyle = COLORS.roller;
+  hexPath(ctx, x, y, layout.size, 0.78);
+  ctx.fillStyle = active ? COLORS.roller : COLORS.rollerIdle;
   ctx.fill();
+  ctx.strokeStyle = active ? '#ffffff' : COLORS.rollerDark;
+  ctx.lineWidth = active ? 5 : 3;
+  ctx.stroke();
   ctx.beginPath();
   ctx.arc(x, y, layout.size * 0.3, 0, Math.PI * 2);
   ctx.fillStyle = COLORS.rollerDark;
@@ -110,7 +136,6 @@ function draw(ctx: CanvasRenderingContext2D, state: State, anim: Anim<State, Sho
   const shown = anim ? anim.from : state;
   const layout = layoutOf(shown);
   drawBoard(ctx, layout, shown);
-  if (!anim && state.status === 'playing') drawAim(ctx, layout, shown);
 
   const path = anim?.events.path ?? [];
   const progress = anim ? anim.t * path.length : 0;
@@ -118,6 +143,7 @@ function draw(ctx: CanvasRenderingContext2D, state: State, anim: Anim<State, Sho
 
   for (const [key, stage] of Object.entries(shown.walls)) drawWall(ctx, layout, hexOf(key), stage);
   for (const key of shown.targets) if (!passed.has(key)) drawTarget(ctx, layout, hexOf(key));
+  if (!anim && state.status === 'playing') drawAim(ctx, layout, shown);
   shown.rollers.forEach((key, i) => drawRoller(ctx, layout, hexOf(key), i === selected && shown.status === 'playing'));
 
   if (anim) {
