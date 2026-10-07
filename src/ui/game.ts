@@ -4,7 +4,7 @@ import { LEVELS, PLATE_INTRO_AT, PUSH_INTRO_AT } from '../game/levels';
 import { createState, fire, starsOf, type ShotResult, type State, type TireKind } from '../game/rules';
 import { centerOf, hexAt, hexPath, layoutFor, type HexLayout } from './hexview';
 import { t } from './i18n';
-import type { Anim, GameDef } from './shell';
+import type { Anim, GameDef, RuleEntry } from './shell';
 
 // 論理サイズ。描画はすべてこの座標で書く（実際の大きさは kit/scale が合わせる）
 const VIEW = { width: 720, height: 720 } as const;
@@ -20,9 +20,66 @@ const HINTS: Record<number, [ja: string, en: string]> = {
   0: ['黄色いキャラがあなた。キャラのまっすぐ先をタップすると、タイヤを転がして的を倒す', 'The yellow character is you. Tap a cell in a straight line from it to roll a tire at a target'],
   1: ['壁は、軽いタイヤ1発で1段削れる。先に壁をどかそう', 'A light tire chips one layer off a wall. Clear the wall first'],
   2: ['重いタイヤは的を貫いて進む。壁は、何段あっても1発で壊す', 'A heavy tire rolls straight through targets, and smashes a wall of any thickness in one shot'],
-  [PUSH_INTRO_AT]: ['キャラが2人いる時は、タップして撃つキャラを選ぶ。仲間にタイヤを当てると、1マス押されて動く', 'With two characters, tap one to choose who fires. Hit your partner with a tire to push them one cell'],
+  [PUSH_INTRO_AT]: ['仲間の向こう側（点線の枠）をタップすると、仲間にタイヤが当たり、1マス押されて動く。キャラをタップすると、撃つ人が替わる', 'Tap beyond your partner (the dashed frame) to hit them with a tire and push them one cell. Tap a character to switch who fires'],
   [PLATE_INTRO_AT]: ['水色の板に当たると、矢印の向きへ曲がる。当たるたびに板の向きが入れ替わる', 'A tire turns at a cyan plate, following its arrow. The plate flips each time it is hit'],
 };
+
+// ルールブック。from 番目のステージまで進むと読めるようになる
+const RULES: RuleEntry[] = [
+  {
+    from: 0,
+    title: t('キャラとタイヤ', 'Characters and tires'),
+    text: t(
+      '黄色いキャラがあなた。キャラのまっすぐ先のマスをタップすると、その向きにタイヤを転がす。点線が、タイヤの通る道。赤い的を全部倒すとクリア。',
+      'The yellow character is you. Tap a cell in a straight line from it to roll a tire that way. The dotted line shows where the tire will go. Knock down every red target to clear the stage.',
+    ),
+  },
+  {
+    from: 0,
+    title: t('星と発射数', 'Stars and shots'),
+    text: t(
+      '右上の「★3 は ○ 発」が、一番少ない発射数。その数で倒しきると ★3、1発多いと ★2。それより多くは撃てない。残りの数は、下のボタンに書いてある。',
+      'The ★3 number at the top is the fewest shots possible. Match it for ★3; one more gives ★2. You cannot fire more than that. The buttons below show how many shots are left.',
+    ),
+  },
+  {
+    from: 0,
+    title: t('1手戻す・やり直す', 'Undo and retry'),
+    text: t('↶ で1手戻す。↻ でステージを最初からやり直す。', '↶ takes back one shot. ↻ restarts the stage.'),
+  },
+  {
+    from: 1,
+    title: t('壁', 'Walls'),
+    text: t(
+      'タイヤは壁に当たると止まる。軽いタイヤは、壁を1段削る。中に明るい六角形がある壁は2段あり、軽いタイヤなら2発かかる。',
+      'A tire stops at a wall. A light tire chips off one layer. A wall with a bright hexagon inside has two layers, so it takes two light tires.',
+    ),
+  },
+  {
+    from: 2,
+    title: t('重いタイヤ', 'Heavy tires'),
+    text: t(
+      '的を倒しても止まらず、貫いて進む。壁は、何段あっても1発で壊す（壁では止まる）。使える数が決まっている。',
+      'It keeps rolling through targets. It smashes a wall of any thickness in one shot (and stops there). You only get a few.',
+    ),
+  },
+  {
+    from: PUSH_INTRO_AT,
+    title: t('仲間を押す', 'Pushing a partner'),
+    text: t(
+      'キャラが2人以上いる時は、キャラをタップして撃つ人を選ぶ。仲間にタイヤを当てると、仲間は1マス押されて動き、狙える線が変わる。先のマスがふさがっている時は動かない。点線の枠が、動く先。仲間をタップすると撃つ人が替わるので、押したい時は、仲間の向こう側のマス（点線の枠）をタップする。',
+      'With two or more characters, tap one to choose who fires. A tire that hits a partner pushes them one cell, changing what they can aim at. They do not move if the next cell is blocked. The dashed frame shows where they will land. Tapping a partner selects them, so to push, tap the cell beyond them (the dashed frame).',
+    ),
+  },
+  {
+    from: PLATE_INTRO_AT,
+    title: t('向きを変える板', 'Turning plates'),
+    text: t(
+      '水色の板に当たったタイヤは、矢印の向きへ曲がって進み続ける。当たるたびに、板の矢印が逆向きに入れ替わる。曲がった先のマスをタップしても撃てる。',
+      'A tire that hits a cyan plate turns the way its arrow points and keeps rolling. The arrow flips each time the plate is hit. You can also tap a cell beyond the bend to fire.',
+    ),
+  },
+];
 
 let levelIndex = 0;
 let selected = 0;
@@ -256,6 +313,8 @@ export const game: GameDef<State, ShotResult> = {
   howto: t('黄色いキャラを操作して、タイヤを転がし、的を全部倒そう。少ない発射数で倒すほど星が増える。', 'Guide the yellow characters, roll tires, and knock down every target. Fewer shots earn more stars.'),
   view: VIEW,
   levelCount: LEVELS.length,
+  rules: RULES,
+  undoable: true,
 
   start(level) {
     levelIndex = level;

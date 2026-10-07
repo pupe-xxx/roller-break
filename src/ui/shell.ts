@@ -30,6 +30,13 @@ export interface Anim<S, E> {
   t: number;
 }
 
+/** ルールブックの1項目。from 番目（0 から数える）のステージまで進むと、読めるようになる */
+export interface RuleEntry {
+  from: number;
+  title: string;
+  text: string;
+}
+
 export interface GameDef<S, E> {
   /** セーブの名前。ゲームごとに違う名前にする */
   saveKey: string;
@@ -50,6 +57,15 @@ export interface GameDef<S, E> {
   buttons?(state: S): ToolButton[];
   press?(state: S, id: string): Step<S, E> | null;
   tap(state: S, x: number, y: number): Step<S, E> | null;
+  /** ルールブックの中身。新しい項目があるステージに初めて入った時は、自動で開く */
+  rules?: RuleEntry[];
+  /** true なら「1手戻す」ボタンを出す */
+  undoable?: boolean;
+  /**
+   * マウスを乗せている位置を知らせる（盤から出た時と、1手戻した時は x・y とも -1）。
+   * 置く前の下見などに使う。描き直しが要る時は true を返す。指で触る端末では呼ばれない
+   */
+  hover?(state: S, x: number, y: number): boolean;
   draw(ctx: CanvasRenderingContext2D, state: S, anim: Anim<S, E> | null): void;
 }
 
@@ -62,7 +78,7 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   await platform.init();
 
   const sound = createSound();
-  const save = createSave(def.saveKey, { stars: [] as number[], muted: false });
+  const save = createSave(def.saveKey, { stars: [] as number[], muted: false, seenRules: [] as number[] });
   const record = save.load();
   sound.setMuted(record.muted);
 
@@ -70,17 +86,43 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   let state = def.start(0);
   let anim: Anim<S, E> | null = null;
   let busy = false; // 動きを見せている間・広告の間は入力を受けない
+  let history: S[] = []; // 1手戻すために、変わる前の状態を積んでおく
 
   const starsOf = (i: number) => record.stars[i] ?? 0;
-  // テストプレイ用。手元で動かした時（npm run dev）だけ、番地の後ろに ?unlock を付けると全ステージを遊べる。
+  // テストプレイ用。手元で動かした時（npm run dev）は、最初から全ステージを遊べる。
+  // 鍵のかかり方を見たい時は、番地の後ろに ?lock を付ける。
   // 公開用のビルドでは import.meta.env.DEV が false になり、この行ごと消える（星の記録は変えない）
-  const unlockAll = import.meta.env.DEV && new URLSearchParams(location.search).has('unlock');
+  const unlockAll = import.meta.env.DEV && !new URLSearchParams(location.search).has('lock');
   /** クリアした一番先のステージの、2つ先まで遊べる（1つ詰まっても先へ進める） */
-  const unlocked = (i: number) => {
-    if (unlockAll) return true;
-    let frontier = 0;
-    for (let k = 0; k < def.levelCount; k++) if (starsOf(k) > 0) frontier = k + 1;
-    return i <= frontier + 1;
+  const unlocked = (i: number) => unlockAll || i <= frontier() + 1;
+  /** クリアした一番先のステージの、次のステージ */
+  const frontier = () => {
+    let next = 0;
+    for (let k = 0; k < def.levelCount; k++) if (starsOf(k) > 0) next = k + 1;
+    return next;
+  };
+
+  /**
+   * ルールブックを開く。読めるのは、今いるステージか、進んだ一番先のステージまでに出てきた項目。
+   * fresh に入っている項目（今のステージで初めて出てきたもの）には、NEW の印を付けて先頭に出す。
+   */
+  const showRules = (fresh: RuleEntry[] = []) => {
+    const reached = Math.max(level, frontier());
+    const known = (def.rules ?? []).filter((rule) => rule.from <= reached && !fresh.includes(rule));
+    const box = el('rulesList');
+    box.replaceChildren();
+    for (const rule of [...fresh, ...known]) {
+      const item = document.createElement('div');
+      item.className = fresh.includes(rule) ? 'rule new' : 'rule';
+      const title = document.createElement('h3');
+      title.textContent = rule.title;
+      const text = document.createElement('p');
+      text.textContent = rule.text;
+      item.append(title, text);
+      box.append(item);
+    }
+    box.scrollTop = 0;
+    el('rules').hidden = false;
   };
   const starText = (n: number) => '★'.repeat(n) + '☆'.repeat(3 - n);
 
@@ -108,6 +150,7 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     el('counter').textContent = def.counter(state);
     el('hint').textContent = def.hint(level);
     el('muteBtn').textContent = sound.muted ? '🔇' : '🔊';
+    el<HTMLButtonElement>('undoBtn').disabled = history.length === 0 || def.status(state) !== 'playing';
     renderTools();
   };
 
@@ -137,11 +180,20 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     level = i;
     state = def.start(i);
     anim = null;
+    history = [];
     el('select').hidden = true;
     el('result').hidden = true;
     busy = false;
     platform.gameplayStart();
     render();
+    // 新しいルールが出てくるステージに初めて入った時は、ルールブックを開いて見せる
+    const fresh = (def.rules ?? []).filter((rule) => rule.from === i);
+    record.seenRules ??= [];
+    if (fresh.length > 0 && !record.seenRules.includes(i)) {
+      record.seenRules.push(i);
+      save.save(record);
+      showRules(fresh);
+    }
   };
 
   const showResult = () => {
@@ -184,6 +236,8 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     if (step.sound === 'tap') sound.tone(520, 60);
     else if (step.sound === 'hit') sound.tone(740, 120);
     else if (step.sound === 'miss') sound.tone(240, 120);
+    // 状態が変わる手だけ積む（駒の種類を選ぶ・下見するだけの操作は積まない）
+    if (step.state !== state) history.push(state);
     if (step.events === undefined || !step.ms) {
       settle(step.state);
       return;
@@ -212,11 +266,42 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     if (step) run(step);
   });
 
+  // マウスを乗せた位置を知らせる。指で触る端末には「乗せる」が無いので、マウスの時だけ
+  const hoverAt = (x: number, y: number) => {
+    if (!busy && def.status(state) === 'playing' && def.hover?.(state, x, y)) def.draw(ctx, state, anim);
+  };
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    const { x, y } = fit.toLogical(e.clientX, e.clientY);
+    hoverAt(x, y);
+  });
+  canvas.addEventListener('pointerleave', (e) => {
+    if (e.pointerType === 'mouse') hoverAt(-1, -1);
+  });
+
+  el('undoBtn').hidden = !def.undoable;
+  el('undoBtn').addEventListener('click', () => {
+    if (busy || def.status(state) !== 'playing') return;
+    const before = history.pop();
+    if (before === undefined) return;
+    state = before;
+    def.hover?.(state, -1, -1);
+    sound.tone(420, 60);
+    render();
+  });
+
   el('retryBtn').addEventListener('click', () => {
     if (!busy) void play(level, false);
   });
   el('menuBtn').addEventListener('click', () => {
     if (!busy) showSelect();
+  });
+  el('rulesBtn').hidden = !def.rules?.length;
+  el('rulesBtn').addEventListener('click', () => {
+    if (!busy) showRules();
+  });
+  el('rulesClose').addEventListener('click', () => {
+    el('rules').hidden = true;
   });
   el('muteBtn').addEventListener('click', () => {
     sound.setMuted(!sound.muted);
@@ -235,6 +320,8 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   el('resultRetry').textContent = t('もう一度', 'Retry');
   el('resultNext').textContent = t('次へ', 'Next');
   el('resultMenu').textContent = t('ステージ選択', 'Stages');
+  el('rulesTitle').textContent = t('ルール', 'Rules');
+  el('rulesClose').textContent = t('閉じる', 'Close');
 
   platform.loadingFinished();
   render();

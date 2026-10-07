@@ -35,3 +35,14 @@ button.selected { background: var(--accent); border-color: var(--accent); color:
 #resultNote { margin: 0 0 8px; font-size: 14px; }
 #result .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 #resultNext { background: var(--accent); border-color: var(--accent); color: #0a111b; font-weight: 700; }
+
+/* ルールブックは盤の上に重ねる。閉じればそのまま続きから遊べる */
+#rules { position: absolute; inset: 0; background: rgba(10, 17, 27, 0.97); display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; }
+#rulesTitle { margin: 0; font-size: 22px; color: var(--accent); }
+#rulesList { flex: 1; min-height: 0; overflow-y: auto; width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 8px; }
+.rule { background: #16243a; border: 1px solid #22344f; border-radius: 8px; padding: 10px 12px; }
+.rule.new { border-color: var(--accent); }
+.rule.new h3::after { content: 'NEW'; margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--accent); color: #0a111b; font-size: 11px; vertical-align: middle; }
+.rule h3 { margin: 0 0 4px; font-size: 15px; color: #fff; }
+.rule p { margin: 0; font-size: 14px; line-height: 1.6; }
+#rulesClose { min-width: 140px; background: var(--accent); border-color: var(--accent); color: #0a111b; font-weight: 700; }
