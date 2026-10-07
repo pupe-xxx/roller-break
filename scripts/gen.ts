@@ -31,15 +31,17 @@ interface Tier {
 // 後ろの段階ほど、盤が広く、でたらめに撃って解ける割合が低い。
 // 並びは src/game/levels.ts が決める（段階の間に、押す・板を覚える手作りのステージが入る）ので、数を変えたらそちらも直す
 const TIERS: Tier[] = [
-  // 壁と重いタイヤだけ
+  // 壁と重いタイヤだけ（7）
   { radius: 2, rollers: [1, 2], targets: [3, 4], walls: [3, 5], heavy: [1, 1], plates: [0, 0], par: [4, 5], maxLucky: 0.4, count: 3 },
-  { radius: 3, rollers: [1, 2], targets: [4, 5], walls: [5, 8], heavy: [1, 1], plates: [0, 0], par: [5, 6], maxLucky: 0.25, count: 2 },
-  // 転師を押す
-  { radius: 3, rollers: [2, 2], targets: [4, 5], walls: [4, 7], heavy: [0, 1], plates: [0, 0], par: [5, 7], maxLucky: 0.15, needPush: true, count: 4 },
-  // 板で曲げる
-  { radius: 3, rollers: [1, 2], targets: [4, 5], walls: [4, 7], heavy: [0, 1], plates: [1, 2], par: [5, 7], maxLucky: 0.15, needPlate: true, count: 4 },
-  // 両方
+  { radius: 3, rollers: [1, 2], targets: [4, 5], walls: [5, 8], heavy: [1, 1], plates: [0, 0], par: [5, 6], maxLucky: 0.25, count: 4 },
+  // 転師を押す（8）
+  { radius: 3, rollers: [2, 2], targets: [4, 5], walls: [4, 7], heavy: [0, 1], plates: [0, 0], par: [5, 7], maxLucky: 0.15, needPush: true, count: 8 },
+  // 板で曲げる（8）
+  { radius: 3, rollers: [1, 2], targets: [4, 5], walls: [4, 7], heavy: [0, 1], plates: [1, 2], par: [5, 7], maxLucky: 0.15, needPlate: true, count: 8 },
+  // 両方（6）
   { radius: 4, rollers: [2, 3], targets: [5, 7], walls: [6, 10], heavy: [1, 2], plates: [1, 3], par: [6, 8], maxLucky: 0.05, needPush: true, needPlate: true, count: 6 },
+  // 両方。転師が3人で、的が多い（6）
+  { radius: 4, rollers: [3, 3], targets: [6, 8], walls: [6, 10], heavy: [1, 2], plates: [2, 3], par: [7, 9], maxLucky: 0.05, needPush: true, needPlate: true, count: 6 },
 ];
 
 const between = (rng: Rng, [min, max]: Range) => min + rng.int(max - min + 1);

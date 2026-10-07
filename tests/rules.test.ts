@@ -137,8 +137,8 @@ describe('発射', () => {
 });
 
 describe('ステージ', () => {
-  it('20 ステージ以上ある', () => {
-    expect(LEVELS.length).toBeGreaterThanOrEqual(20);
+  it('40 ステージある', () => {
+    expect(LEVELS.length).toBe(40);
   });
 
   it('どのステージも解けて、par が最少の発射数と合っている', () => {
@@ -146,13 +146,13 @@ describe('ステージ', () => {
       const best = solve(l, l.par);
       expect(best?.shots.length, `ステージ ${i + 1}`).toBe(l.par);
     });
-  });
+  }, 120000); // 全ステージを総当たりで解くので、時間がかかる
 
   it('重いタイヤは、1つ減らすと最少の発射数では解けない（余る重いタイヤが無い）', () => {
     LEVELS.forEach((l, i) => {
       if (l.heavy > 0) expect(solve({ ...l, heavy: l.heavy - 1 }, l.par), `ステージ ${i + 1}`).toBeNull();
     });
-  });
+  }, 120000);
 
   it('ヒントの通りに撃ち続けると、どのステージも最少の発射数でクリアできる', () => {
     LEVELS.forEach((l, i) => {

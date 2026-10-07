@@ -18,15 +18,15 @@ const PUSH_INTRO: Level = { radius: 2, rollers: [[-2, 0], [0, 0]], targets: [[1,
 const PLATE_INTRO: Level = { radius: 2, rollers: [[-2, 0]], targets: [[2, -2], [0, 2]], walls: [], plates: [[0, 0, 1]], heavy: 0, par: 2 };
 
 /** 押すのを覚えるステージ・板を覚えるステージが、何番目に入るか（0 から数える） */
-export const PUSH_INTRO_AT = INTRO.length + 5;
-export const PLATE_INTRO_AT = PUSH_INTRO_AT + 1 + 4;
+export const PUSH_INTRO_AT = INTRO.length + 7;
+export const PLATE_INTRO_AT = PUSH_INTRO_AT + 1 + 8;
 
-// 並び：覚える3つ → 壁と重いタイヤ（5）→ 押すのを覚える → 押す（4）→ 板を覚える → 板（4）→ 両方（6）
+// 並び：覚える3つ → 壁と重いタイヤ（7）→ 押すのを覚える → 押す（8）→ 板を覚える → 板（8）→ 両方（12）。全部で 40
 export const LEVELS: Level[] = [
   ...INTRO,
-  ...GENERATED.slice(0, 5),
+  ...GENERATED.slice(0, 7),
   PUSH_INTRO,
-  ...GENERATED.slice(5, 9),
+  ...GENERATED.slice(7, 15),
   PLATE_INTRO,
-  ...GENERATED.slice(9),
+  ...GENERATED.slice(15),
 ];

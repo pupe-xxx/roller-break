@@ -357,7 +357,7 @@ let kindShown: TireKind = 'light';
 
 export const game: GameDef<State, ShotResult> = {
   // ステージの並びを変えたら番号を上げる（前の並びの星が、別のステージに付いてしまうため）
-  saveKey: 'roller-break.v2',
+  saveKey: 'roller-break.v3',
   title: 'ROLLER BREAK',
   howto: t('黄色いキャラを操作して、タイヤを転がし、的を全部倒そう。少ない発射数で倒すほど星が増える。', 'Guide the yellow characters, roll tires, and knock down every target. Fewer shots earn more stars.'),
   view: VIEW,
