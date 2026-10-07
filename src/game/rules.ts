@@ -11,6 +11,8 @@ export interface Level {
   targets: Hex[];
   /** [q, r, 段数]。段数は 1 か 2 */
   walls: (readonly [q: number, r: number, stage: number])[];
+  /** 向きを変える板。[q, r, 曲げる向き]。曲げる向きは 1（左へ 60°）か -1（右へ 60°） */
+  plates?: (readonly [q: number, r: number, turn: number])[];
   /** 重いタイヤを撃てる回数 */
   heavy: number;
   /** ★3 になる発射数（最少の発射数） */
@@ -24,6 +26,8 @@ export interface State {
   targets: string[];
   /** 残っている壁の段数 */
   walls: Record<string, number>;
+  /** 板が今どちらへ曲げるか。1 は左へ 60°、-1 は右へ 60° */
+  plates: Record<string, number>;
   heavyLeft: number;
   shots: number;
   par: number;
@@ -40,11 +44,20 @@ export interface Shot {
 
 export interface ShotResult {
   state: State;
-  /** タイヤが通ったマス。止まったマス（壁・的・転師）や、盤の外に出た最初のマスも含む */
+  /** タイヤが通ったマス。止まったマス（壁・的・転師）や、盤の外に出た最初のマスも含む。板で曲がった後のマスも続けて入る */
   path: Hex[];
   /** 倒した的が path の何番目にあるか */
   hitAt: number[];
   end: 'out' | 'wall' | 'target' | 'roller';
+  /** 押されて動いた転師の番号。動かなかった時は -1 */
+  pushed: number;
+  /** 盤が変わったか（的が倒れた・壁が削れた・転師が動いた・板の向きが変わった）。変わらない発射は、撃つ意味が無い */
+  changed: boolean;
+}
+
+export interface FireOptions {
+  /** false にすると、転師は押されても動かない（ステージ作りで「押すのが要るか」を調べるのに使う） */
+  push?: boolean;
 }
 
 /** ★3 の発射数より、何発多く撃てるか。余裕が多いと、考えずに撃っても倒しきれてしまう */
@@ -56,6 +69,7 @@ export function createState(level: Level, limit: number = level.par + EXTRA_SHOT
     rollers: level.rollers.map(([q, r]) => keyOf(q, r)),
     targets: level.targets.map(([q, r]) => keyOf(q, r)).sort(),
     walls: Object.fromEntries(level.walls.map(([q, r, stage]) => [keyOf(q, r), stage])),
+    plates: Object.fromEntries((level.plates ?? []).map(([q, r, turn]) => [keyOf(q, r), turn])),
     heavyLeft: level.heavy,
     shots: 0,
     par: level.par,
@@ -64,45 +78,72 @@ export function createState(level: Level, limit: number = level.par + EXTRA_SHOT
   };
 }
 
+/** タイヤが進めるマスの数の上限。板で回り続けることが無いように止める */
+const MAX_STEPS = 200;
+
 /**
  * 1発撃った後の状態を新しく返す（元の状態は変えない）。撃てない時は null。
- * タイヤはまっすぐ進む。壁に当たると1段削って止まる。
+ * タイヤはまっすぐ進む。壁に当たると止まる。軽いタイヤは壁を1段削り、重いタイヤは何段あっても1発で壊す。
  * 軽いタイヤは的を1つ倒して止まり、重いタイヤは的を倒しながら進み続ける。
+ * 板に当たると、板の向きへ 60° 曲がって進み続け、板は逆向きに切り替わる。
+ * 転師に当たると止まり、当たった転師は、先のマスが空いていれば1マス押される。
  */
-export function fire(state: State, shot: Shot): ShotResult | null {
+export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotResult | null {
   if (state.status !== 'playing') return null;
   if (shot.kind === 'heavy' && state.heavyLeft <= 0) return null;
   const from = state.rollers[shot.roller];
-  const step = DIRS[shot.dir];
-  if (from === undefined || step === undefined) return null;
+  if (from === undefined || DIRS[shot.dir] === undefined) return null;
 
   const walls = { ...state.walls };
+  const plates = { ...state.plates };
+  let rollers = state.rollers;
   let targets = state.targets;
   const path: Hex[] = [];
   const hitAt: number[] = [];
   let end: ShotResult['end'] = 'out';
+  let pushed = -1;
+  let changed = false;
+  let dir = shot.dir;
   let [q, r] = from.split(',').map(Number);
 
-  for (;;) {
-    q += step[0];
-    r += step[1];
+  while (path.length < MAX_STEPS) {
+    q += DIRS[dir][0];
+    r += DIRS[dir][1];
     path.push([q, r]);
     if (!inBoard(q, r, state.radius)) break;
     const key = keyOf(q, r);
-    if (state.rollers.includes(key)) {
+    const hitRoller = rollers.indexOf(key);
+    if (hitRoller >= 0) {
       end = 'roller';
+      const [tq, tr] = [q + DIRS[dir][0], r + DIRS[dir][1]];
+      const to = keyOf(tq, tr);
+      const free = inBoard(tq, tr, state.radius) && !walls[to] && !plates[to] && !targets.includes(to) && !rollers.includes(to);
+      if (free && options.push !== false) {
+        rollers = rollers.map((cell, i) => (i === hitRoller ? to : cell));
+        pushed = hitRoller;
+        changed = true;
+      }
       break;
     }
     const stage = walls[key];
     if (stage) {
-      if (stage > 1) walls[key] = stage - 1;
+      if (stage > 1 && shot.kind === 'light') walls[key] = stage - 1;
       else delete walls[key];
       end = 'wall';
+      changed = true;
       break;
+    }
+    const turn = plates[key];
+    if (turn) {
+      dir = (dir + turn + 6) % 6;
+      plates[key] = -turn;
+      changed = true;
+      continue;
     }
     if (targets.includes(key)) {
       targets = targets.filter((t) => t !== key);
       hitAt.push(path.length - 1);
+      changed = true;
       if (shot.kind === 'light') {
         end = 'target';
         break;
@@ -115,8 +156,10 @@ export function fire(state: State, shot: Shot): ShotResult | null {
   return {
     state: {
       ...state,
+      rollers,
       targets,
       walls,
+      plates,
       heavyLeft: state.heavyLeft - (shot.kind === 'heavy' ? 1 : 0),
       shots,
       status,
@@ -124,6 +167,8 @@ export function fire(state: State, shot: Shot): ShotResult | null {
     path,
     hitAt,
     end,
+    pushed,
+    changed,
   };
 }
 

@@ -1,5 +1,13 @@
 // 総当たりで最少の発射数を求める。ステージの確認と、ステージ作りに使う。
-import { createState, fire, type Level, type Shot, type State } from './rules';
+import { createState, fire, type FireOptions, type Level, type Shot, type State } from './rules';
+
+export interface SolveOptions extends FireOptions {
+  /** 調べる盤面の数がこれを超えたら、あきらめて例外を投げる（ステージ作りで、重すぎる候補を捨てるのに使う） */
+  maxStates?: number;
+}
+
+/** 調べる盤面が多すぎて、あきらめた */
+export class TooManyStates extends Error {}
 
 export interface Solution {
   /** 最少の発射数で倒しきる撃ち方の1つ */
@@ -8,11 +16,13 @@ export interface Solution {
   ways: number;
 }
 
+const cellsKey = (cells: Record<string, number>): string => Object.keys(cells).sort().map((k) => `${k}=${cells[k]}`).join(';');
+
 const stateKey = (s: State): string =>
-  `${s.targets.join(';')}|${Object.keys(s.walls).sort().map((k) => `${k}=${s.walls[k]}`).join(';')}|${s.heavyLeft}`;
+  `${s.targets.join(';')}|${cellsKey(s.walls)}|${s.heavyLeft}|${s.rollers.join(';')}|${cellsKey(s.plates)}`;
 
 /** maxShots 発までで倒しきれなければ null */
-export function solve(level: Level, maxShots: number = 8): Solution | null {
+export function solve(level: Level, maxShots: number = 8, options: SolveOptions = {}): Solution | null {
   const start = createState(level, Infinity);
   if (start.targets.length === 0) return { shots: [], ways: 1 };
 
@@ -28,9 +38,9 @@ export function solve(level: Level, maxShots: number = 8): Solution | null {
         for (let dir = 0; dir < 6; dir++) {
           for (const kind of ['light', 'heavy'] as const) {
             const shot: Shot = { roller, dir, kind };
-            const result = fire(node.state, shot);
-            // 何にも当たらない発射は、最少の撃ち方には入らない
-            if (!result || (result.hitAt.length === 0 && result.end !== 'wall')) continue;
+            const result = fire(node.state, shot, options);
+            // 盤が変わらない発射は、最少の撃ち方には入らない
+            if (!result || !result.changed) continue;
             if (result.state.status === 'cleared') {
               if (solved) solved.ways += node.ways;
               else solved = { shots: [...node.shots, shot], ways: node.ways };
@@ -46,6 +56,7 @@ export function solve(level: Level, maxShots: number = 8): Solution | null {
     }
     if (solved) return solved;
     for (const key of next.keys()) seen.add(key);
+    if (options.maxStates !== undefined && seen.size > options.maxStates) throw new TooManyStates();
     layer = next;
     if (layer.size === 0) return null;
   }

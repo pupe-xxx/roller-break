@@ -45,9 +45,9 @@ describe('発射', () => {
     expect(fire(s, { roller: 0, dir: EAST, kind: 'heavy' })).toBeNull();
   });
 
-  it('壁に当たると1段削って止まる。2段の壁は2発で無くなる', () => {
+  it('軽いタイヤは、壁に当たると1段削って止まる。2段の壁は2発で無くなる', () => {
     const s = createState(level({ targets: [[1, 0]], walls: [[0, 0, 2]], heavy: 1, par: 3 }));
-    const first = fire(s, { roller: 0, dir: EAST, kind: 'heavy' })!;
+    const first = fire(s, { roller: 0, dir: EAST, kind: 'light' })!;
     expect(first.end).toBe('wall');
     expect(first.state.walls).toEqual({ '0,0': 1 });
     expect(first.state.targets).toEqual(['1,0']);
@@ -57,11 +57,55 @@ describe('発射', () => {
     expect(third.state.status).toBe('cleared');
   });
 
+  it('重いタイヤは、2段の壁も1発で壊して止まる', () => {
+    const s = createState(level({ targets: [[1, 0]], walls: [[0, 0, 2]], heavy: 1 }), 9);
+    const result = fire(s, { roller: 0, dir: EAST, kind: 'heavy' })!;
+    expect(result.end).toBe('wall');
+    expect(result.state.walls).toEqual({});
+    expect(result.state.targets).toEqual(['1,0']);
+  });
+
   it('ほかの転師に当たると止まる', () => {
     const s = createState(level({ rollers: [[-2, 0], [0, 0]], targets: [[1, 0]] }));
     const result = fire(s, { roller: 0, dir: EAST, kind: 'light' })!;
     expect(result.end).toBe('roller');
     expect(result.state.targets).toEqual(['1,0']);
+  });
+
+  it('転師に当たると、その転師が1マス押される。先がふさがっていれば動かない', () => {
+    const s = createState(level({ rollers: [[-2, 0], [0, 0]], targets: [[1, -2]] }), 9);
+    const pushed = fire(s, { roller: 0, dir: EAST, kind: 'light' })!;
+    expect(pushed.state.rollers).toEqual(['-2,0', '1,0']);
+    expect(pushed.pushed).toBe(1);
+    expect(pushed.changed).toBe(true);
+    // 押された先からは、前は狙えなかった的が狙える
+    const hit = fire(pushed.state, { roller: 1, dir: 2, kind: 'light' })!;
+    expect(hit.state.status).toBe('cleared');
+
+    const blocked = createState(level({ rollers: [[-2, 0], [0, 0]], targets: [[2, -2]], walls: [[1, 0, 1]] }), 9);
+    const stay = fire(blocked, { roller: 0, dir: EAST, kind: 'light' })!;
+    expect(stay.state.rollers).toEqual(['-2,0', '0,0']);
+    expect(stay.changed).toBe(false);
+    // 盤の端にいる転師は、外へは押されない
+    const edge = createState(level({ rollers: [[0, 0], [2, 0]], targets: [[2, -2]] }), 9);
+    expect(fire(edge, { roller: 0, dir: EAST, kind: 'light' })!.state.rollers).toEqual(['0,0', '2,0']);
+  });
+
+  it('板に当たると 60° 曲がって進み、板は逆向きに切り替わる', () => {
+    const s = createState(level({ targets: [[2, -2], [0, 2]], plates: [[0, 0, 1]] }), 9);
+    const left = fire(s, { roller: 0, dir: EAST, kind: 'light' })!;
+    expect(left.state.targets).toEqual(['0,2']);
+    expect(left.state.plates).toEqual({ '0,0': -1 });
+    expect(left.path).toEqual([[-1, 0], [0, 0], [1, -1], [2, -2]]);
+    const right = fire(left.state, { roller: 0, dir: EAST, kind: 'light' })!;
+    expect(right.state.status).toBe('cleared');
+    expect(right.state.plates).toEqual({ '0,0': 1 });
+  });
+
+  it('板が輪になっていても、タイヤは止まる', () => {
+    const ring: Level['plates'] = [[1, 0, 1], [1, -1, 1], [0, -1, 1], [-1, 0, 1], [-1, 1, 1], [0, 1, 1]];
+    const s = createState({ radius: 2, rollers: [[1, 1]], targets: [[2, -2]], walls: [], plates: ring, heavy: 0, par: 1 }, 9);
+    expect(fire(s, { roller: 0, dir: 2, kind: 'light' })).not.toBeNull();
   });
 
   it('発射数を使い切ると失敗になり、それ以上撃てない', () => {
@@ -94,9 +138,9 @@ describe('ステージ', () => {
     });
   });
 
-  it('転師・的・壁が同じマスに重なっていない', () => {
+  it('転師・的・壁・板が同じマスに重なっていない', () => {
     LEVELS.forEach((l, i) => {
-      const keys = [...l.rollers, ...l.targets, ...l.walls].map(([q, r]) => `${q},${r}`);
+      const keys = [...l.rollers, ...l.targets, ...l.walls, ...(l.plates ?? [])].map(([q, r]) => `${q},${r}`);
       expect(new Set(keys).size, `ステージ ${i + 1}`).toBe(keys.length);
     });
   });

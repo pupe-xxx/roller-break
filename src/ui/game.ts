@@ -1,6 +1,6 @@
 // このゲームの画面。盤を描き、タップを発射に直して、外枠（shell）に渡す。
 import { DIRS, boardCells, dirTo, hexOf, inBoard, keyOf, type Hex } from '../game/hex';
-import { LEVELS } from '../game/levels';
+import { LEVELS, PLATE_INTRO_AT, PUSH_INTRO_AT } from '../game/levels';
 import { createState, fire, starsOf, type ShotResult, type State, type TireKind } from '../game/rules';
 import { centerOf, hexAt, hexPath, layoutFor, type HexLayout } from './hexview';
 import { t } from './i18n';
@@ -9,16 +9,20 @@ import type { Anim, GameDef } from './shell';
 // 論理サイズ。描画はすべてこの座標で書く（実際の大きさは kit/scale が合わせる）
 const VIEW = { width: 720, height: 720 } as const;
 const COLORS = {
-  bg: '#0a111b', cell: '#16243a', grid: '#22344f', aim: 'rgba(255,224,130,0.55)',
+  bg: '#0a111b', cell: '#16243a', grid: '#22344f', aim: 'rgba(255,224,130,0.5)',
   wall: '#7d8fa3', wallEdge: '#4a5a6e', wall2: '#dfe7ef', target: '#ff3d3d', targetRing: '#ffffff',
-  roller: '#ffd54f', rollerIdle: '#9c8a55', rollerDark: '#2b2410', select: '#ffe082', tire: '#263238',
+  plate: '#26c6da', plateDark: '#0b3238',
+  roller: '#ffd54f', rollerIdle: '#8d7f58', rollerDark: '#2b2410', skin: '#ffe0b2', select: '#ffe082', tire: '#263238',
 } as const;
 
-const HINTS: [ja: string, en: string][] = [
-  ['転師のまっすぐ先をタップすると、タイヤが転がる', 'Tap a cell in a straight line from the roller to launch a tire'],
-  ['壁は1発で1段削れる。先に壁をどかそう', 'A tire chips one layer off a wall. Clear the wall first'],
-  ['重いタイヤは的を貫いて進む', 'A heavy tire rolls straight through targets'],
-];
+// 画面の言葉では「転師」と言わず、「キャラ」と言う（初めての人には何のことか分からないため）
+const HINTS: Record<number, [ja: string, en: string]> = {
+  0: ['黄色いキャラがあなた。キャラのまっすぐ先をタップすると、タイヤを転がして的を倒す', 'The yellow character is you. Tap a cell in a straight line from it to roll a tire at a target'],
+  1: ['壁は、軽いタイヤ1発で1段削れる。先に壁をどかそう', 'A light tire chips one layer off a wall. Clear the wall first'],
+  2: ['重いタイヤは的を貫いて進む。壁は、何段あっても1発で壊す', 'A heavy tire rolls straight through targets, and smashes a wall of any thickness in one shot'],
+  [PUSH_INTRO_AT]: ['キャラが2人いる時は、タップして撃つキャラを選ぶ。仲間にタイヤを当てると、1マス押されて動く', 'With two characters, tap one to choose who fires. Hit your partner with a tire to push them one cell'],
+  [PLATE_INTRO_AT]: ['水色の板に当たると、矢印の向きへ曲がる。当たるたびに板の向きが入れ替わる', 'A tire turns at a cyan plate, following its arrow. The plate flips each time it is hit'],
+};
 
 let levelIndex = 0;
 let selected = 0;
@@ -41,43 +45,90 @@ function drawBoard(ctx: CanvasRenderingContext2D, layout: HexLayout, state: Stat
   }
 }
 
+/** 選んでいる転師が、今のタイヤで dir の向きに撃った時の結果。タイヤが通るマスは、盤の中の分だけ返す */
+function aimOf(state: State, dir: number): { shot: ShotResult; cells: Hex[] } | null {
+  const shot = fire(state, { roller: selected, dir, kind });
+  if (!shot) return null;
+  return { shot, cells: shot.path.filter(([q, r]) => inBoard(q, r, state.radius)) };
+}
+
 /**
- * 選んでいる転師から撃てる6本の線を見せる。線は、今選んでいるタイヤが止まる所（壁・的・ほかの転師）まで引く。
- * 何かに当たる線は、止まるマスに輪を付ける。何にも当たらない線は、盤の端まで薄く引く。
+ * 選んでいるキャラから撃って、何かが起きる線だけを見せる（何も起きない向きは描かない。線が多いと見づらいため）。
+ * 線は、今選んでいるタイヤが通る道に沿って、止まる所まで引く。当たる物には輪を付ける。
  */
 function drawAim(ctx: CanvasRenderingContext2D, layout: HexLayout, state: State): void {
   const from = state.rollers[selected];
   if (from === undefined) return;
   const start = centerOf(layout, hexOf(from));
   ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = COLORS.aim;
   for (let dir = 0; dir < DIRS.length; dir++) {
-    const shot = fire(state, { roller: selected, dir, kind });
-    if (!shot || shot.path.length < 2 && shot.end === 'out') continue;
-    const hits = shot.end !== 'out' || shot.hitAt.length > 0;
-    // 盤の外に出た時は、最後のマス（盤の外）の1つ手前まで
-    const last = shot.end === 'out' ? shot.path[shot.path.length - 2] : shot.path[shot.path.length - 1];
-    if (!last) continue;
-    const end = centerOf(layout, last);
-    ctx.globalAlpha = hits ? 1 : 0.3;
-    ctx.strokeStyle = COLORS.aim;
-    ctx.lineWidth = hits ? 5 : 3;
-    ctx.setLineDash(hits ? [] : [3, 11]);
+    const aim = aimOf(state, dir);
+    if (!aim || !aim.shot.changed || aim.cells.length === 0) continue;
+    const { shot, cells } = aim;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([2, 9]);
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
-    ctx.lineTo(end.x, end.y);
+    for (const cell of cells) {
+      const { x, y } = centerOf(layout, cell);
+      ctx.lineTo(x, y);
+    }
     ctx.stroke();
     ctx.setLineDash([]);
-    // 当たる物（最後に止まる物と、重いタイヤが貫く的）に輪を付ける
+    // 当たる物（最後に止まる壁か仲間と、倒れる的）に輪を付ける
     const marks = shot.hitAt.map((k) => shot.path[k]);
-    if (shot.end === 'wall' || shot.end === 'roller') marks.push(last);
+    if (shot.end === 'wall' || shot.end === 'roller') marks.push(cells[cells.length - 1]);
     for (const cell of marks) {
       const { x, y } = centerOf(layout, cell);
       hexPath(ctx, x, y, layout.size, 0.9);
       ctx.lineWidth = 4;
       ctx.stroke();
     }
+    // 仲間が押される時は、動く先のマスを点線の枠で見せる
+    if (shot.pushed >= 0) {
+      const { x, y } = centerOf(layout, hexOf(shot.state.rollers[shot.pushed]));
+      hexPath(ctx, x, y, layout.size, 0.7);
+      ctx.lineWidth = 3;
+      ctx.setLineDash([6, 8]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
-  ctx.globalAlpha = 1;
+}
+
+/** 向きを変える板。丸い矢印が、曲げる向き（左回りか右回りか）を表す */
+function drawPlate(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, turn: number): void {
+  const { x, y } = centerOf(layout, cell);
+  const size = layout.size;
+  hexPath(ctx, x, y, size, 0.84);
+  ctx.fillStyle = COLORS.plateDark;
+  ctx.fill();
+  ctx.strokeStyle = COLORS.plate;
+  ctx.lineWidth = 4;
+  ctx.stroke();
+  // 画面では、左へ曲げる（turn = 1）が左回り
+  const ccw = turn > 0;
+  const radius = size * 0.36;
+  const a0 = -Math.PI * 0.5, sweep = Math.PI * 1.4;
+  const a1 = ccw ? a0 - sweep : a0 + sweep;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(4, size * 0.11);
+  ctx.beginPath();
+  ctx.arc(x, y, radius, a0, a1, ccw);
+  ctx.stroke();
+  // 矢じり。弧の終わりで、進む向きを指す
+  const tx = x + Math.cos(a1) * radius, ty = y + Math.sin(a1) * radius;
+  const heading = a1 + (ccw ? -Math.PI / 2 : Math.PI / 2);
+  const head = size * 0.24;
+  ctx.beginPath();
+  ctx.moveTo(tx + Math.cos(heading) * head, ty + Math.sin(heading) * head);
+  ctx.lineTo(tx + Math.cos(heading + 2.3) * head, ty + Math.sin(heading + 2.3) * head);
+  ctx.lineTo(tx + Math.cos(heading - 2.3) * head, ty + Math.sin(heading - 2.3) * head);
+  ctx.closePath();
+  ctx.fillStyle = COLORS.plate;
+  ctx.fill();
 }
 
 function drawWall(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, stage: number): void {
@@ -106,19 +157,57 @@ function drawTarget(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex)
   });
 }
 
-/** 転師は六角形の台で描く（的は丸なので、形でも見分けられる）。選んでいない転師は色を落とす */
+/**
+ * 操作するキャラ。帽子をかぶった人が、タイヤを抱えている絵で描く（的・壁・板とは形で見分けられる）。
+ * 選んでいるキャラは明るい色で、足もとに光る台が付く。選んでいないキャラは色を落とす。
+ */
 function drawRoller(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, active: boolean): void {
   const { x, y } = centerOf(layout, cell);
-  hexPath(ctx, x, y, layout.size, 0.78);
-  ctx.fillStyle = active ? COLORS.roller : COLORS.rollerIdle;
-  ctx.fill();
-  ctx.strokeStyle = active ? '#ffffff' : COLORS.rollerDark;
-  ctx.lineWidth = active ? 5 : 3;
-  ctx.stroke();
+  const u = layout.size;
+  const body = active ? COLORS.roller : COLORS.rollerIdle;
+  if (active) {
+    hexPath(ctx, x, y, u, 0.92);
+    ctx.fillStyle = 'rgba(255,213,79,0.22)';
+    ctx.fill();
+    ctx.strokeStyle = COLORS.select;
+    ctx.lineWidth = 4;
+    ctx.stroke();
+  }
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = COLORS.rollerDark;
+  ctx.lineWidth = 3;
+  // 体
   ctx.beginPath();
-  ctx.arc(x, y, layout.size * 0.3, 0, Math.PI * 2);
-  ctx.fillStyle = COLORS.rollerDark;
+  ctx.moveTo(x - u * 0.36, y + u * 0.56);
+  ctx.quadraticCurveTo(x - u * 0.4, y - u * 0.02, x, y - u * 0.04);
+  ctx.quadraticCurveTo(x + u * 0.4, y - u * 0.02, x + u * 0.36, y + u * 0.56);
+  ctx.closePath();
+  ctx.fillStyle = body;
   ctx.fill();
+  ctx.stroke();
+  // 頭
+  ctx.beginPath();
+  ctx.arc(x, y - u * 0.28, u * 0.24, 0, Math.PI * 2);
+  ctx.fillStyle = active ? COLORS.skin : '#b8a58a';
+  ctx.fill();
+  ctx.stroke();
+  // 帽子
+  ctx.beginPath();
+  ctx.arc(x, y - u * 0.32, u * 0.25, Math.PI, 0);
+  ctx.lineTo(x + u * 0.36, y - u * 0.32);
+  ctx.lineTo(x - u * 0.25, y - u * 0.32);
+  ctx.closePath();
+  ctx.fillStyle = body;
+  ctx.fill();
+  ctx.stroke();
+  // 抱えているタイヤ
+  ctx.beginPath();
+  ctx.arc(x, y + u * 0.3, u * 0.2, 0, Math.PI * 2);
+  ctx.fillStyle = COLORS.tire;
+  ctx.fill();
+  ctx.strokeStyle = active ? '#ffffff' : '#9aa7b3';
+  ctx.lineWidth = 3;
+  ctx.stroke();
 }
 
 function drawTire(ctx: CanvasRenderingContext2D, layout: HexLayout, x: number, y: number, heavy: boolean): void {
@@ -142,6 +231,7 @@ function draw(ctx: CanvasRenderingContext2D, state: State, anim: Anim<State, Sho
   const passed = new Set((anim?.events.hitAt ?? []).filter((i) => progress >= i + 0.5).map((i) => keyOf(...path[i])));
 
   for (const [key, stage] of Object.entries(shown.walls)) drawWall(ctx, layout, hexOf(key), stage);
+  for (const [key, turn] of Object.entries(shown.plates)) drawPlate(ctx, layout, hexOf(key), turn);
   for (const key of shown.targets) if (!passed.has(key)) drawTarget(ctx, layout, hexOf(key));
   if (!anim && state.status === 'playing') drawAim(ctx, layout, shown);
   shown.rollers.forEach((key, i) => drawRoller(ctx, layout, hexOf(key), i === selected && shown.status === 'playing'));
@@ -160,9 +250,10 @@ function draw(ctx: CanvasRenderingContext2D, state: State, anim: Anim<State, Sho
 let kindShown: TireKind = 'light';
 
 export const game: GameDef<State, ShotResult> = {
-  saveKey: 'roller-break.v1',
+  // ステージの並びを変えたら番号を上げる（前の並びの星が、別のステージに付いてしまうため）
+  saveKey: 'roller-break.v2',
   title: 'ROLLER BREAK',
-  howto: t('タイヤを転がして、的を全部倒そう。少ない発射数で倒すほど星が増える。', 'Roll tires to knock down every target. Fewer shots earn more stars.'),
+  howto: t('黄色いキャラを操作して、タイヤを転がし、的を全部倒そう。少ない発射数で倒すほど星が増える。', 'Guide the yellow characters, roll tires, and knock down every target. Fewer shots earn more stars.'),
   view: VIEW,
   levelCount: LEVELS.length,
 
@@ -175,8 +266,7 @@ export const game: GameDef<State, ShotResult> = {
   status: (state) => state.status,
   stars: starsOf,
   counter: (state) => {
-    const left = state.limit - state.shots;
-    return t(`残り ${left} 発（★3 は ${state.par} 発）`, `${left} shots left (★3: ${state.par})`);
+    return t(`★3 は ${state.par} 発`, `★3: ${state.par} shots`);
   },
   hint: (level) => {
     const hint = HINTS[level];
@@ -185,11 +275,12 @@ export const game: GameDef<State, ShotResult> = {
   failText: () => t('タイヤを使い切りました', 'Out of tires'),
 
   buttons(state) {
-    if (LEVELS[levelIndex].heavy === 0) return [];
-    return [
-      { id: 'light', label: t('軽いタイヤ', 'Light tire'), selected: kind === 'light' },
-      { id: 'heavy', label: t(`重いタイヤ ×${state.heavyLeft}`, `Heavy tire ×${state.heavyLeft}`), selected: kind === 'heavy', disabled: state.heavyLeft === 0 },
-    ];
+    // 残りの数は、ボタンに書く。重いタイヤも1発に数えるので、残りの発射数より多くは撃てない
+    const left = state.limit - state.shots;
+    const light = { id: 'light', label: t(`軽いタイヤ ×${left}`, `Light tire ×${left}`), selected: kind === 'light' };
+    if (LEVELS[levelIndex].heavy === 0) return [light];
+    const heavy = Math.min(state.heavyLeft, left);
+    return [light, { id: 'heavy', label: t(`重いタイヤ ×${heavy}`, `Heavy tire ×${heavy}`), selected: kind === 'heavy', disabled: heavy === 0 }];
   },
   press(state, id) {
     kind = id === 'heavy' && state.heavyLeft > 0 ? 'heavy' : 'light';
@@ -204,14 +295,15 @@ export const game: GameDef<State, ShotResult> = {
       selected = roller;
       return { state, sound: 'tap' };
     }
-    const dir = dirTo(hexOf(state.rollers[selected]), cell);
+    // まっすぐ先のマスのほか、板で曲がった先のマスをタップしても、その線で撃つ
+    let dir = dirTo(hexOf(state.rollers[selected]), cell);
+    if (dir < 0) dir = DIRS.findIndex((_, d) => aimOf(state, d)?.cells.some(([q, r]) => q === cell[0] && r === cell[1]));
     if (dir < 0) return null;
     const result = fire(state, { roller: selected, dir, kind });
     if (!result) return null;
     kindShown = kind;
     if (result.state.heavyLeft === 0) kind = 'light';
-    const hit = result.hitAt.length > 0 || result.end === 'wall';
-    return { state: result.state, events: result, ms: 70 * result.path.length + 120, sound: hit ? 'hit' : 'miss' };
+    return { state: result.state, events: result, ms: 70 * result.path.length + 120, sound: result.changed ? 'hit' : 'miss' };
   },
 
   draw,

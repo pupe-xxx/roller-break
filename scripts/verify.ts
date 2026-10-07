@@ -1,12 +1,13 @@
 // par が本当に最少かを、solve.ts とは別のやり方で確かめる。
 // 使い方: npm run verify
-// solve.ts は、発射数の少ない順に盤面を広げていき（幅優先）、何にも当たらない発射は飛ばす。
+// solve.ts は、発射数の少ない順に盤面を広げていき（幅優先）、盤が変わらない発射は飛ばす。
 // ここでは、1つの撃ち方を最後まで追ってから戻る別の順番（深さ優先）で、何にも当たらない発射も飛ばさずに、
 // par より1発少ない撃ち方を全部試して、どれでも倒しきれないことを見る。
 import { LEVELS } from '../src/game/levels';
 import { createState, fire, type Level, type State } from '../src/game/rules';
 
-const boardKey = (s: State): string => JSON.stringify([s.targets, Object.entries(s.walls).sort(), s.heavyLeft]);
+const boardKey = (s: State): string =>
+  JSON.stringify([s.targets, Object.entries(s.walls).sort(), s.heavyLeft, s.rollers, Object.entries(s.plates).sort()]);
 
 /** left 発以内の撃ち方を全部試して、倒しきれるものがあれば true。failed は「この盤面は、残り何発までなら無理と分かったか」 */
 function clearable(state: State, left: number, failed: Map<string, number>): boolean {
