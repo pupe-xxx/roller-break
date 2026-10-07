@@ -59,6 +59,11 @@ export interface GameDef<S, E> {
   tap(state: S, x: number, y: number): Step<S, E> | null;
   /** ルールブックの中身。新しい項目があるステージに初めて入った時は、自動で開く */
   rules?: RuleEntry[];
+  /**
+   * ヒント。今の盤面から、次に打つとよい1手を盤の上に見せる準備をして、画面に出す一言を返す
+   * （見せ方はゲーム側の draw が決める）。これがあるゲームでは、何度か失敗すると「ヒント」のボタンが出る
+   */
+  showHint?(state: S): string;
   /** true なら「1手戻す」ボタンを出す */
   undoable?: boolean;
   /**
@@ -78,8 +83,23 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   await platform.init();
 
   const sound = createSound();
-  const save = createSave(def.saveKey, { stars: [] as number[], muted: false, seenRules: [] as number[] });
+  const save = createSave(def.saveKey, {
+    stars: [] as number[],
+    muted: false,
+    seenRules: [] as number[],
+    /** ステージごとの、失敗した回数 */
+    fails: [] as number[],
+    /** 飛ばしたステージの番号 */
+    skipped: [] as number[],
+    /** 飛ばすのに使った星の数 */
+    spent: 0,
+  });
   const record = save.load();
+  // 前の版の保存には無い項目を補う
+  record.seenRules ??= [];
+  record.fails ??= [];
+  record.skipped ??= [];
+  record.spent ??= 0;
   sound.setMuted(record.muted);
 
   let level = 0;
@@ -98,9 +118,21 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   /** クリアした一番先のステージの、次のステージ */
   const frontier = () => {
     let next = 0;
-    for (let k = 0; k < def.levelCount; k++) if (starsOf(k) > 0) next = k + 1;
+    for (let k = 0; k < def.levelCount; k++) if (starsOf(k) > 0 || record.skipped.includes(k)) next = k + 1;
     return next;
   };
+
+  // 詰まった時の助け。同じステージで HINT_AFTER 回失敗するとヒントが、SKIP_AFTER 回失敗すると「飛ばす」が出る。
+  // 手元で動かした時は、確かめやすいように最初から出す（?lock を付けると、公開版と同じ出方になる）
+  const HINT_AFTER = 2, SKIP_AFTER = 4, SKIP_COST = 3;
+  const failsOf = (i: number) => record.fails[i] ?? 0;
+  const earned = () => record.stars.reduce((sum, n) => sum + (n ?? 0), 0);
+  /** 飛ばすのに使える星の数 */
+  const wallet = () => earned() - record.spent;
+  const hintOpen = () => !!def.showHint && (unlockAll || failsOf(level) >= HINT_AFTER);
+  const skipOpen = () => starsOf(level) === 0 && !record.skipped.includes(level) && level + 1 < def.levelCount && (unlockAll || failsOf(level) >= SKIP_AFTER);
+  /** 広告を見てもらう。広告の無い版（GitHub Pages・手元）では、そのまま通す */
+  const reward = async () => platform.name === 'none' || (await platform.rewardedBreak());
 
   /**
    * ルールブックを開く。読めるのは、今いるステージか、進んだ一番先のステージまでに出てきた項目。
@@ -142,6 +174,38 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
       });
       box.append(button);
     }
+    if (hintOpen()) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'help';
+      button.textContent = t('💡 ヒント', '💡 Hint');
+      button.addEventListener('click', () => void useHint());
+      box.append(button);
+    }
+  };
+
+  const useHint = async () => {
+    if (busy || def.status(state) !== 'playing' || !def.showHint) return;
+    busy = true;
+    const ok = await reward();
+    busy = false;
+    if (!ok) return;
+    const text = def.showHint(state);
+    def.draw(ctx, state, anim);
+    el('hint').textContent = text;
+  };
+
+  /** 星を払って、今のステージを飛ばす（クリア扱いにして、次のステージへ進む） */
+  const useSkip = async () => {
+    if (busy || !skipOpen() || wallet() < SKIP_COST) return;
+    busy = true;
+    const ok = await reward();
+    busy = false;
+    if (!ok) return;
+    record.spent += SKIP_COST;
+    record.skipped.push(level);
+    save.save(record);
+    void play(level + 1, false);
   };
 
   const render = () => {
@@ -165,12 +229,13 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
       const button = document.createElement('button');
       button.type = 'button';
       button.disabled = !unlocked(i);
-      button.innerHTML = `<b>${i + 1}</b><span>${unlocked(i) ? starText(starsOf(i)) : '🔒'}</span>`;
+      const mark = !unlocked(i) ? '🔒' : starsOf(i) === 0 && record.skipped.includes(i) ? t('飛ばした', 'skipped') : starText(starsOf(i));
+      button.innerHTML = `<b>${i + 1}</b><span>${mark}</span>`;
       button.addEventListener('click', () => void play(i, false));
       box.append(button);
     }
-    const total = record.stars.reduce((sum, n) => sum + (n ?? 0), 0);
-    el('total').textContent = `★ ${total} / ${def.levelCount * 3}`;
+    const spent = record.spent > 0 ? t(`（飛ばすのに使える星 ${wallet()}）`, ` (${wallet()} left to spend on skips)`) : '';
+    el('total').textContent = `★ ${earned()} / ${def.levelCount * 3}${spent}`;
     el('select').hidden = false;
   };
 
@@ -188,7 +253,6 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     render();
     // 新しいルールが出てくるステージに初めて入った時は、ルールブックを開いて見せる
     const fresh = (def.rules ?? []).filter((rule) => rule.from === i);
-    record.seenRules ??= [];
     if (fresh.length > 0 && !record.seenRules.includes(i)) {
       record.seenRules.push(i);
       save.save(record);
@@ -205,6 +269,8 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
       save.save(record);
       [660, 880, 1100].slice(0, stars).forEach((hz, i) => setTimeout(() => sound.tone(hz, 180), i * 140));
     } else {
+      record.fails[level] = failsOf(level) + 1;
+      save.save(record);
       sound.tone(180, 400);
     }
     const hasNext = level + 1 < def.levelCount;
@@ -214,6 +280,13 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
       ? stars === 3 ? t('最少の手数です', 'Best possible!') : t('もっと少ない手数で解けます', 'It can be done in fewer moves')
       : def.failText(state);
     el('resultNext').hidden = !(cleared && hasNext);
+    // 失敗が重なったら、星を払って飛ばせる
+    const skip = el<HTMLButtonElement>('resultSkip');
+    skip.hidden = cleared || !skipOpen();
+    skip.disabled = wallet() < SKIP_COST;
+    skip.textContent = skip.disabled
+      ? t(`飛ばす（★${SKIP_COST} が要る。今 ★${wallet()}）`, `Skip (needs ★${SKIP_COST}; you have ★${wallet()})`)
+      : t(`★${SKIP_COST} で飛ばす（今 ★${wallet()}）`, `Skip for ★${SKIP_COST} (you have ★${wallet()})`);
     el('result').classList.toggle('failed', !cleared);
     el('result').hidden = false;
   };
@@ -313,6 +386,7 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   el('resultRetry').addEventListener('click', () => void play(level, true));
   el('resultNext').addEventListener('click', () => void play(level + 1, true));
   el('resultMenu').addEventListener('click', showSelect);
+  el('resultSkip').addEventListener('click', () => void useSkip());
 
   document.title = def.title;
   el('title').textContent = def.title;

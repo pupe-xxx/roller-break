@@ -46,3 +46,7 @@ button.selected { background: var(--accent); border-color: var(--accent); color:
 .rule h3 { margin: 0 0 4px; font-size: 15px; color: #fff; }
 .rule p { margin: 0; font-size: 14px; line-height: 1.6; }
 #rulesClose { min-width: 140px; background: var(--accent); border-color: var(--accent); color: #0a111b; font-weight: 700; }
+
+/* 詰まった時の助け（ヒント）は、ゲームのボタンと色を変える */
+#tools button.help { min-width: 0; border-color: #ffd54f; color: #ffd54f; }
+#resultSkip { border-color: #ffd54f; color: #ffd54f; }

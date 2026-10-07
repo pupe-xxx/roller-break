@@ -1,7 +1,8 @@
 // このゲームの画面。盤を描き、タップを発射に直して、外枠（shell）に渡す。
 import { DIRS, boardCells, dirTo, hexOf, inBoard, keyOf, type Hex } from '../game/hex';
 import { LEVELS, PLATE_INTRO_AT, PUSH_INTRO_AT } from '../game/levels';
-import { createState, fire, lightLeft, starsOf, type ShotResult, type State, type TireKind } from '../game/rules';
+import { createState, fire, lightLeft, starsOf, type Shot, type ShotResult, type State, type TireKind } from '../game/rules';
+import { solveFrom } from '../game/solve';
 import { centerOf, hexAt, hexPath, layoutFor, type HexLayout } from './hexview';
 import { t } from './i18n';
 import type { Anim, GameDef, RuleEntry } from './shell';
@@ -48,6 +49,14 @@ const RULES: RuleEntry[] = [
     text: t('↶ で1手戻す。↻ でステージを最初からやり直す。', '↶ takes back one shot. ↻ restarts the stage.'),
   },
   {
+    from: 0,
+    title: t('詰まった時', 'When you are stuck'),
+    text: t(
+      '同じステージで 2 回失敗すると「ヒント」のボタンが出る。押すと、次の1手を白い線で教える。何度でも使える。4 回失敗すると、失敗の画面に「飛ばす」が出る。集めた星を 3 つ払って、次のステージへ進める。',
+      'Fail a stage twice and a Hint button appears. It shows the next shot as a white line, as often as you like. Fail four times and a Skip button appears on the fail screen: pay 3 of your stars to move on.',
+    ),
+  },
+  {
     from: 1,
     title: t('壁', 'Walls'),
     text: t(
@@ -82,6 +91,8 @@ const RULES: RuleEntry[] = [
 ];
 
 let levelIndex = 0;
+/** 見せているヒント。その盤面のままの間だけ見せる（撃つ・戻す・やり直すで盤面が替わると消える） */
+let hint: { state: State; shot: Shot } | null = null;
 let selected = 0;
 let kind: TireKind = 'light';
 
@@ -152,6 +163,43 @@ function drawAim(ctx: CanvasRenderingContext2D, layout: HexLayout, state: State)
       ctx.stroke();
       ctx.setLineDash([]);
     }
+  }
+}
+
+/** ヒントの1手。撃つキャラからタイヤの通る道を、太い白い線で見せる */
+function drawHint(ctx: CanvasRenderingContext2D, layout: HexLayout, state: State, shot: Shot): void {
+  const result = fire(state, shot);
+  if (!result) return;
+  const cells = result.path.filter(([q, r]) => inBoard(q, r, state.radius));
+  const start = centerOf(layout, hexOf(state.rollers[shot.roller]));
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 7;
+  ctx.beginPath();
+  ctx.moveTo(start.x, start.y);
+  for (const cell of cells) {
+    const { x, y } = centerOf(layout, cell);
+    ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  hexPath(ctx, start.x, start.y, layout.size, 1);
+  ctx.lineWidth = 6;
+  ctx.stroke();
+  // 最後のマスに矢じり
+  const last = cells[cells.length - 1];
+  const before = cells.length > 1 ? centerOf(layout, cells[cells.length - 2]) : start;
+  if (last) {
+    const end = centerOf(layout, last);
+    const angle = Math.atan2(end.y - before.y, end.x - before.x);
+    const head = layout.size * 0.42;
+    ctx.beginPath();
+    ctx.moveTo(end.x + Math.cos(angle) * head * 0.6, end.y + Math.sin(angle) * head * 0.6);
+    ctx.lineTo(end.x + Math.cos(angle + 2.5) * head, end.y + Math.sin(angle + 2.5) * head);
+    ctx.lineTo(end.x + Math.cos(angle - 2.5) * head, end.y + Math.sin(angle - 2.5) * head);
+    ctx.closePath();
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
   }
 }
 
@@ -292,6 +340,7 @@ function draw(ctx: CanvasRenderingContext2D, state: State, anim: Anim<State, Sho
   for (const key of shown.targets) if (!passed.has(key)) drawTarget(ctx, layout, hexOf(key));
   if (!anim && state.status === 'playing') drawAim(ctx, layout, shown);
   shown.rollers.forEach((key, i) => drawRoller(ctx, layout, hexOf(key), i === selected && shown.status === 'playing'));
+  if (!anim && hint && hint.state === state) drawHint(ctx, layout, state, hint.shot);
 
   if (anim) {
     const from = hexOf(shown.rollers[selected]);
@@ -315,9 +364,25 @@ export const game: GameDef<State, ShotResult> = {
   levelCount: LEVELS.length,
   rules: RULES,
   undoable: true,
+  showHint(state) {
+    const best = solveFrom(state, state.limit - state.shots);
+    if (!best || best.shots.length === 0) {
+      hint = null;
+      return t('ここからは倒しきれない。↶ で戻すか、↻ でやり直そう', 'It cannot be cleared from here. Undo with ↶ or restart with ↻');
+    }
+    const shot = best.shots[0];
+    hint = { state, shot };
+    // その手を撃てるように、キャラとタイヤを選んでおく
+    selected = shot.roller;
+    kind = shot.kind;
+    return shot.kind === 'heavy'
+      ? t('白い線の通りに、重いタイヤで撃つ（線の先のマスをタップ）', 'Fire a HEAVY tire along the white line (tap a cell on it)')
+      : t('白い線の通りに、軽いタイヤで撃つ（線の先のマスをタップ）', 'Fire a light tire along the white line (tap a cell on it)');
+  },
 
   start(level) {
     levelIndex = level;
+    hint = null;
     selected = 0;
     kind = 'light';
     return createState(LEVELS[level]);

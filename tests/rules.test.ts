@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { boardCells, dirTo, hexDist } from '../src/game/hex';
 import { LEVELS } from '../src/game/levels';
 import { createState, fire, lightLeft, starsOf, type Level } from '../src/game/rules';
-import { solve } from '../src/game/solve';
+import { solve, solveFrom } from '../src/game/solve';
 
 const level = (over: Partial<Level>): Level => ({ radius: 2, rollers: [[-2, 0]], targets: [], walls: [], heavy: 0, par: 1, ...over });
 const EAST = 0;
@@ -152,6 +152,26 @@ describe('ステージ', () => {
     LEVELS.forEach((l, i) => {
       if (l.heavy > 0) expect(solve({ ...l, heavy: l.heavy - 1 }, l.par), `ステージ ${i + 1}`).toBeNull();
     });
+  });
+
+  it('ヒントの通りに撃ち続けると、どのステージも最少の発射数でクリアできる', () => {
+    LEVELS.forEach((l, i) => {
+      let s = createState(l);
+      while (s.status === 'playing') {
+        const best = solveFrom(s, s.limit - s.shots);
+        expect(best, `ステージ ${i + 1}`).not.toBeNull();
+        s = fire(s, best!.shots[0])!.state;
+      }
+      expect(s.status, `ステージ ${i + 1}`).toBe('cleared');
+      expect(s.shots, `ステージ ${i + 1}`).toBe(l.par);
+    });
+  }, 120000);
+
+  it('残りのタイヤでは倒しきれない盤面では、ヒントは「無い」を返す', () => {
+    // 的は右に2つ。タイヤは2個あるが、1発を何も無い向きに撃つと、残り1個では倒しきれない
+    const s = createState(level({ targets: [[0, 0], [2, 0]] }), 2);
+    const wasted = fire(s, { roller: 0, dir: 2, kind: 'light' })!.state;
+    expect(solveFrom(wasted, 1)).toBeNull();
   });
 
   it('転師・的・壁・板が同じマスに重なっていない', () => {

@@ -23,7 +23,14 @@ const stateKey = (s: State): string =>
 
 /** maxShots 発までで倒しきれなければ null */
 export function solve(level: Level, maxShots: number = 8, options: SolveOptions = {}): Solution | null {
-  const start = createState(level, Infinity);
+  return solveFrom(createState(level, Infinity), maxShots, options);
+}
+
+/**
+ * 途中の盤面から、最少の発射数で倒しきる撃ち方を探す（ヒントに使う）。
+ * 盤面が持っているタイヤの数を守るので、残りのタイヤでは倒しきれない時は null になる。
+ */
+export function solveFrom(start: State, maxShots: number = 8, options: SolveOptions = {}): Solution | null {
   if (start.targets.length === 0) return { shots: [], ways: 1 };
 
   // 幅優先。同じ盤面は、最初に着いた時の撃ち方だけ覚える
