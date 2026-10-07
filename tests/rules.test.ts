@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { boardCells, dirTo, hexDist } from '../src/game/hex';
 import { LEVELS } from '../src/game/levels';
-import { createState, fire, starsOf, type Level } from '../src/game/rules';
+import { createState, fire, lightLeft, starsOf, type Level } from '../src/game/rules';
 import { solve } from '../src/game/solve';
 
 const level = (over: Partial<Level>): Level => ({ radius: 2, rollers: [[-2, 0]], targets: [], walls: [], heavy: 0, par: 1, ...over });
@@ -108,6 +108,16 @@ describe('発射', () => {
     expect(fire(s, { roller: 0, dir: 2, kind: 'light' })).not.toBeNull();
   });
 
+  it('軽いタイヤと重いタイヤは、数が別々。軽いタイヤが無くなると、重いタイヤしか撃てない', () => {
+    // 全部で3個。そのうち重いタイヤが2個なので、軽いタイヤは1個
+    let s = createState(level({ targets: [[2, 0]], walls: [[0, 0, 2], [1, 0, 2]], heavy: 2 }), 3);
+    expect(lightLeft(s)).toBe(1);
+    s = fire(s, { roller: 0, dir: 2, kind: 'light' })!.state;
+    expect(lightLeft(s)).toBe(0);
+    expect(fire(s, { roller: 0, dir: EAST, kind: 'light' })).toBeNull();
+    expect(fire(s, { roller: 0, dir: EAST, kind: 'heavy' })).not.toBeNull();
+  });
+
   it('発射数を使い切ると失敗になり、それ以上撃てない', () => {
     let s = createState(level({ targets: [[1, 0]], par: 1 }), 2);
     s = fire(s, { roller: 0, dir: 3, kind: 'light' })!.state;
@@ -135,6 +145,12 @@ describe('ステージ', () => {
     LEVELS.forEach((l, i) => {
       const best = solve(l, l.par);
       expect(best?.shots.length, `ステージ ${i + 1}`).toBe(l.par);
+    });
+  });
+
+  it('重いタイヤは、1つ減らすと最少の発射数では解けない（余る重いタイヤが無い）', () => {
+    LEVELS.forEach((l, i) => {
+      if (l.heavy > 0) expect(solve({ ...l, heavy: l.heavy - 1 }, l.par), `ステージ ${i + 1}`).toBeNull();
     });
   });
 

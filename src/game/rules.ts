@@ -31,7 +31,7 @@ export interface State {
   heavyLeft: number;
   shots: number;
   par: number;
-  /** この発射数までに倒しきれなければ失敗 */
+  /** この発射数までに倒しきれなければ失敗。持っているタイヤの数（軽い + 重い）でもある */
   limit: number;
   status: Status;
 }
@@ -59,6 +59,12 @@ export interface FireOptions {
   /** false にすると、転師は押されても動かない（ステージ作りで「押すのが要るか」を調べるのに使う） */
   push?: boolean;
 }
+
+/**
+ * 残っている軽いタイヤの数。持っているタイヤは全部で limit 個で、そのうち重いタイヤを除いた残りが軽いタイヤ。
+ * 重いタイヤの代わりに軽いタイヤを撃つことはできない（数が別々に決まっている）
+ */
+export const lightLeft = (state: State): number => state.limit - state.shots - state.heavyLeft;
 
 /** ★3 の発射数より、何発多く撃てるか。余裕が多いと、考えずに撃っても倒しきれてしまう */
 export const EXTRA_SHOTS = 1;
@@ -91,6 +97,7 @@ const MAX_STEPS = 200;
 export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotResult | null {
   if (state.status !== 'playing') return null;
   if (shot.kind === 'heavy' && state.heavyLeft <= 0) return null;
+  if (shot.kind === 'light' && lightLeft(state) <= 0) return null;
   const from = state.rollers[shot.roller];
   if (from === undefined || DIRS[shot.dir] === undefined) return null;
 

@@ -1,7 +1,7 @@
 // このゲームの画面。盤を描き、タップを発射に直して、外枠（shell）に渡す。
 import { DIRS, boardCells, dirTo, hexOf, inBoard, keyOf, type Hex } from '../game/hex';
 import { LEVELS, PLATE_INTRO_AT, PUSH_INTRO_AT } from '../game/levels';
-import { createState, fire, starsOf, type ShotResult, type State, type TireKind } from '../game/rules';
+import { createState, fire, lightLeft, starsOf, type ShotResult, type State, type TireKind } from '../game/rules';
 import { centerOf, hexAt, hexPath, layoutFor, type HexLayout } from './hexview';
 import { t } from './i18n';
 import type { Anim, GameDef, RuleEntry } from './shell';
@@ -38,8 +38,8 @@ const RULES: RuleEntry[] = [
     from: 0,
     title: t('星と発射数', 'Stars and shots'),
     text: t(
-      '右上の「★3 は ○ 発」が、一番少ない発射数。その数で倒しきると ★3、1発多いと ★2。それより多くは撃てない。残りの数は、下のボタンに書いてある。',
-      'The ★3 number at the top is the fewest shots possible. Match it for ★3; one more gives ★2. You cannot fire more than that. The buttons below show how many shots are left.',
+      '右上の「★3 は ○ 発」が、一番少ない発射数。その数で倒しきると ★3、1発多いと ★2。持っているタイヤの数は、下のボタンに書いてある。全部使っても的が残ると失敗。',
+      'The ★3 number at the top is the fewest shots possible. Match it for ★3; one more gives ★2. The buttons below show how many tires you have. If you use them all and a target is still standing, you fail.',
     ),
   },
   {
@@ -59,8 +59,8 @@ const RULES: RuleEntry[] = [
     from: 2,
     title: t('重いタイヤ', 'Heavy tires'),
     text: t(
-      '的を倒しても止まらず、貫いて進む。壁は、何段あっても1発で壊す（壁では止まる）。使える数が決まっている。',
-      'It keeps rolling through targets. It smashes a wall of any thickness in one shot (and stops there). You only get a few.',
+      '的を倒しても止まらず、貫いて進む。壁は、何段あっても1発で壊す（壁では止まる）。軽いタイヤとは別に数が決まっていて、★3 を取るには全部使う。',
+      'It keeps rolling through targets. It smashes a wall of any thickness in one shot (and stops there). They are counted separately from light tires, and ★3 needs every one of them.',
     ),
   },
   {
@@ -334,16 +334,15 @@ export const game: GameDef<State, ShotResult> = {
   failText: () => t('タイヤを使い切りました', 'Out of tires'),
 
   buttons(state) {
-    // 残りの数は、ボタンに書く。軽いタイヤの数は、あと何発撃てるか（重いタイヤも、その1発に数える）。
-    // 重いタイヤの数は、持っている数をそのまま書く（残りの発射数に合わせて減らすと、使っていないのに減って見える）
-    const left = state.limit - state.shots;
-    const light = { id: 'light', label: t(`軽いタイヤ ×${left}`, `Light tire ×${left}`), selected: kind === 'light' };
-    if (LEVELS[levelIndex].heavy === 0) return [light];
+    // 持っているタイヤの数を、ボタンに書く。軽いタイヤと重いタイヤを合わせた数が、あと撃てる数
+    const light = lightLeft(state);
+    const lightButton = { id: 'light', label: t(`軽いタイヤ ×${light}`, `Light tire ×${light}`), selected: kind === 'light', disabled: light === 0 };
+    if (LEVELS[levelIndex].heavy === 0) return [lightButton];
     const heavy = state.heavyLeft;
-    return [light, { id: 'heavy', label: t(`重いタイヤ ×${heavy}`, `Heavy tire ×${heavy}`), selected: kind === 'heavy', disabled: heavy === 0 }];
+    return [lightButton, { id: 'heavy', label: t(`重いタイヤ ×${heavy}`, `Heavy tire ×${heavy}`), selected: kind === 'heavy', disabled: heavy === 0 }];
   },
   press(state, id) {
-    kind = id === 'heavy' && state.heavyLeft > 0 ? 'heavy' : 'light';
+    kind = (id === 'heavy' && state.heavyLeft > 0) || lightLeft(state) === 0 ? 'heavy' : 'light';
     return { state, sound: 'tap' };
   },
 
@@ -362,7 +361,9 @@ export const game: GameDef<State, ShotResult> = {
     const result = fire(state, { roller: selected, dir, kind });
     if (!result) return null;
     kindShown = kind;
+    // 撃った種類のタイヤが無くなったら、残っている方に切り替える
     if (result.state.heavyLeft === 0) kind = 'light';
+    else if (lightLeft(result.state) === 0) kind = 'heavy';
     return { state: result.state, events: result, ms: 70 * result.path.length + 120, sound: result.changed ? 'hit' : 'miss' };
   },
 

@@ -134,8 +134,8 @@ function accept(level: Level, tier: Tier): Level | null {
     const par = best.shots.length;
 
     // 置いてある物が、どれも最少で解くのに要ること（無くても同じ数で解けるなら、飾りになる）
-    // 重いタイヤ
-    if (level.heavy > 0 && solve({ ...level, heavy: 0 }, par, CAP)) return null;
+    // 重いタイヤ。1つ減らすと最少では解けない数だけ持たせる（余る重いタイヤを置かない）
+    if (level.heavy > 0 && solve({ ...level, heavy: level.heavy - 1 }, par, CAP)) return null;
     // 転師を押すこと
     if (tier.needPush && solve(level, par, { push: false, ...CAP })) return null;
     // 板
