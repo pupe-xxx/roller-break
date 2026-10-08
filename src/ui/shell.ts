@@ -35,6 +35,10 @@ export interface RuleEntry {
   from: number;
   title: string;
   text: string;
+  /** 'general' は、星やボタンなど、ゲーム全体の決まり。書かなければ、ステージの中のルール */
+  scope?: 'general';
+  /** 動く絵。ms は、開いてからの時間。def.view の座標で描く（外枠が小さく縮めて見せる） */
+  demo?(ctx: CanvasRenderingContext2D, ms: number): void;
 }
 
 export interface GameDef<S, E> {
@@ -57,7 +61,7 @@ export interface GameDef<S, E> {
   buttons?(state: S): ToolButton[];
   press?(state: S, id: string): Step<S, E> | null;
   tap(state: S, x: number, y: number): Step<S, E> | null;
-  /** ルールブックの中身。新しい項目があるステージに初めて入った時は、自動で開く */
+  /** ルールブックの中身。新しい項目があるステージに初めて入った時は、その項目だけを自動で見せる */
   rules?: RuleEntry[];
   /**
    * ヒント。今の盤面から、次に打つとよい1手を盤の上に見せる準備をして、画面に出す一言を返す
@@ -123,29 +127,43 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   };
 
   // 詰まった時の助け。同じステージで HINT_AFTER 回失敗するとヒントが、SKIP_AFTER 回失敗すると「飛ばす」が出る。
-  // 手元で動かした時は、確かめやすいように最初から出す（?lock を付けると、公開版と同じ出方になる）
+  // 手元で確かめる時は、番地の後ろに ?help を付けると、最初から出る
   const HINT_AFTER = 2, SKIP_AFTER = 4, SKIP_COST = 3;
+  const helpAll = import.meta.env.DEV && new URLSearchParams(location.search).has('help');
   const failsOf = (i: number) => record.fails[i] ?? 0;
   const earned = () => record.stars.reduce((sum, n) => sum + (n ?? 0), 0);
   /** 飛ばすのに使える星の数 */
   const wallet = () => earned() - record.spent;
-  const hintOpen = () => !!def.showHint && (unlockAll || failsOf(level) >= HINT_AFTER);
-  const skipOpen = () => starsOf(level) === 0 && !record.skipped.includes(level) && level + 1 < def.levelCount && (unlockAll || failsOf(level) >= SKIP_AFTER);
+  const hintOpen = () => !!def.showHint && (helpAll || failsOf(level) >= HINT_AFTER);
+  const skipOpen = () => starsOf(level) === 0 && !record.skipped.includes(level) && level + 1 < def.levelCount && (helpAll || failsOf(level) >= SKIP_AFTER);
   /** 広告を見てもらう。広告の無い版（GitHub Pages・手元）では、そのまま通す */
   const reward = async () => platform.name === 'none' || (await platform.rewardedBreak());
 
-  /**
-   * ルールブックを開く。読めるのは、今いるステージか、進んだ一番先のステージまでに出てきた項目。
-   * fresh に入っている項目（今のステージで初めて出てきたもの）には、NEW の印を付けて先頭に出す。
-   */
-  const showRules = (fresh: RuleEntry[] = []) => {
-    const reached = Math.max(level, frontier());
-    const known = (def.rules ?? []).filter((rule) => rule.from <= reached && !fresh.includes(rule));
+  // ルールブックの動く絵。開いている間だけ、1つの繰り返しで全部を描き直す
+  const DEMO_PX = 300;
+  let demos: { ctx: CanvasRenderingContext2D; draw: (ctx: CanvasRenderingContext2D, ms: number) => void }[] = [];
+  let demoFrame = 0;
+  const stopDemos = () => {
+    cancelAnimationFrame(demoFrame);
+    demos = [];
+  };
+  const listRules = (list: RuleEntry[]) => {
+    stopDemos();
     const box = el('rulesList');
     box.replaceChildren();
-    for (const rule of [...fresh, ...known]) {
+    for (const rule of list) {
       const item = document.createElement('div');
-      item.className = fresh.includes(rule) ? 'rule new' : 'rule';
+      item.className = 'rule';
+      if (rule.demo) {
+        const pic = document.createElement('canvas');
+        const ratio = Math.min(2, window.devicePixelRatio || 1);
+        pic.width = Math.round(DEMO_PX * ratio);
+        pic.height = Math.round((DEMO_PX * ratio * def.view.height) / def.view.width);
+        const picCtx = pic.getContext('2d')!;
+        picCtx.scale(pic.width / def.view.width, pic.height / def.view.height);
+        demos.push({ ctx: picCtx, draw: rule.demo });
+        item.append(pic);
+      }
       const title = document.createElement('h3');
       title.textContent = rule.title;
       const text = document.createElement('p');
@@ -154,10 +172,38 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
       box.append(item);
     }
     box.scrollTop = 0;
+    if (demos.length === 0) return;
+    const began = performance.now();
+    const frame = (now: number) => {
+      for (const demo of demos) demo.draw(demo.ctx, Math.max(0, now - began));
+      demoFrame = requestAnimationFrame(frame);
+    };
+    demoFrame = requestAnimationFrame(frame);
+  };
+
+  /**
+   * ルールブックを開く。fresh（今のステージで初めて出てきた項目）を渡した時は、それだけを見せる。
+   * 渡さない時は、今いるステージか、進んだ一番先のステージまでに出てきた項目を、
+   * 「ステージのルール」と「ゲーム全体のルール」に分けて見せる。
+   */
+  let rulesTab: 'stage' | 'general' = 'stage';
+  const showRules = (fresh: RuleEntry[] = []) => {
+    const all = def.rules ?? [];
+    const isNew = fresh.length > 0;
+    el('rulesTitle').textContent = isNew ? t('新しいルール', 'New rule') : t('ルール', 'Rules');
+    el('rulesTabs').hidden = isNew || !all.some((rule) => rule.scope === 'general');
+    el('rulesTabStage').classList.toggle('selected', rulesTab === 'stage');
+    el('rulesTabGeneral').classList.toggle('selected', rulesTab === 'general');
+    if (isNew) listRules(fresh);
+    else {
+      const reached = unlockAll ? def.levelCount : Math.max(level, frontier());
+      listRules(all.filter((rule) => rule.from <= reached && (rule.scope === 'general') === (rulesTab === 'general')));
+    }
     el('rules').hidden = false;
   };
   const starText = (n: number) => '★'.repeat(n) + '☆'.repeat(3 - n);
 
+  let skipArmed = false; // 「飛ばす」を1回押した所か
   const renderTools = () => {
     const box = el('tools');
     box.replaceChildren();
@@ -180,6 +226,25 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
       button.className = 'help';
       button.textContent = t('💡 ヒント', '💡 Hint');
       button.addEventListener('click', () => void useHint());
+      box.append(button);
+    }
+    // 飛ばすのは、押し間違いで星を払わないように、2回押して決める
+    if (skipOpen()) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'help';
+      button.disabled = wallet() < SKIP_COST;
+      button.textContent = button.disabled
+        ? t(`⏭ 飛ばす（★${SKIP_COST} が要る）`, `⏭ Skip (needs ★${SKIP_COST})`)
+        : skipArmed
+          ? t(`★${SKIP_COST} を払う（今 ★${wallet()}）。もう一度押す`, `Pay ★${SKIP_COST} of ★${wallet()}? Press again`)
+          : t('⏭ 飛ばす', '⏭ Skip');
+      button.addEventListener('click', () => {
+        if (busy) return;
+        if (skipArmed) return void useSkip();
+        skipArmed = true;
+        renderTools();
+      });
       box.append(button);
     }
   };
@@ -215,6 +280,7 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     el('hint').textContent = def.hint(level);
     el('muteBtn').textContent = sound.muted ? '🔇' : '🔊';
     el<HTMLButtonElement>('undoBtn').disabled = history.length === 0 || def.status(state) !== 'playing';
+    skipArmed = false;
     renderTools();
   };
 
@@ -251,8 +317,8 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     busy = false;
     platform.gameplayStart();
     render();
-    // 新しいルールが出てくるステージに初めて入った時は、ルールブックを開いて見せる
-    const fresh = (def.rules ?? []).filter((rule) => rule.from === i);
+    // 新しいルールが出てくるステージに初めて入った時は、その新しいルールだけを見せる
+    const fresh = (def.rules ?? []).filter((rule) => rule.from === i && rule.scope !== 'general');
     if (fresh.length > 0 && !record.seenRules.includes(i)) {
       record.seenRules.push(i);
       save.save(record);
@@ -280,13 +346,6 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
       ? stars === 3 ? t('最少の手数です', 'Best possible!') : t('もっと少ない手数で解けます', 'It can be done in fewer moves')
       : def.failText(state);
     el('resultNext').hidden = !(cleared && hasNext);
-    // 失敗が重なったら、星を払って飛ばせる
-    const skip = el<HTMLButtonElement>('resultSkip');
-    skip.hidden = cleared || !skipOpen();
-    skip.disabled = wallet() < SKIP_COST;
-    skip.textContent = skip.disabled
-      ? t(`飛ばす（★${SKIP_COST} が要る。今 ★${wallet()}）`, `Skip (needs ★${SKIP_COST}; you have ★${wallet()})`)
-      : t(`★${SKIP_COST} で飛ばす（今 ★${wallet()}）`, `Skip for ★${SKIP_COST} (you have ★${wallet()})`);
     el('result').classList.toggle('failed', !cleared);
     el('result').hidden = false;
   };
@@ -373,7 +432,16 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   el('rulesBtn').addEventListener('click', () => {
     if (!busy) showRules();
   });
+  el('selectRules').hidden = !def.rules?.length;
+  el('selectRules').addEventListener('click', () => showRules());
+  for (const [id, tab] of [['rulesTabStage', 'stage'], ['rulesTabGeneral', 'general']] as const) {
+    el(id).addEventListener('click', () => {
+      rulesTab = tab;
+      showRules();
+    });
+  }
   el('rulesClose').addEventListener('click', () => {
+    stopDemos();
     el('rules').hidden = true;
   });
   el('muteBtn').addEventListener('click', () => {
@@ -386,7 +454,6 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   el('resultRetry').addEventListener('click', () => void play(level, true));
   el('resultNext').addEventListener('click', () => void play(level + 1, true));
   el('resultMenu').addEventListener('click', showSelect);
-  el('resultSkip').addEventListener('click', () => void useSkip());
 
   document.title = def.title;
   el('title').textContent = def.title;
@@ -394,7 +461,15 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   el('resultRetry').textContent = t('もう一度', 'Retry');
   el('resultNext').textContent = t('次へ', 'Next');
   el('resultMenu').textContent = t('ステージ選択', 'Stages');
-  el('rulesTitle').textContent = t('ルール', 'Rules');
+  el('selectRules').textContent = t('？ ルール', '? Rules');
+  el('rulesTabStage').textContent = t('ステージのルール', 'Stage rules');
+  el('rulesTabGeneral').textContent = t('ゲーム全体のルール', 'Game rules');
+  // マウスを乗せた時に、ボタンの名前を出す
+  el('menuBtn').title = t('ステージ選択', 'Stages');
+  el('undoBtn').title = t('1手戻す', 'Undo one move');
+  el('retryBtn').title = t('最初からやり直す', 'Restart the stage');
+  el('rulesBtn').title = t('ルール', 'Rules');
+  el('muteBtn').title = t('音を出す・消す', 'Sound on / off');
   el('rulesClose').textContent = t('閉じる', 'Close');
 
   platform.loadingFinished();

@@ -30,21 +30,26 @@
         <button id="resultRetry" type="button"></button>
         <button id="resultNext" type="button"></button>
         <button id="resultMenu" type="button"></button>
-        <button id="resultSkip" type="button" hidden></button>
       </div>
-    </div>
-
-    <div id="rules" hidden>
-      <h2 id="rulesTitle"></h2>
-      <div id="rulesList"></div>
-      <button id="rulesClose" type="button"></button>
     </div>
 
     <div id="select" class="screen" hidden>
       <h1 id="title"></h1>
       <p id="howto"></p>
+      <button id="selectRules" type="button"></button>
       <p id="total"></p>
       <div id="levels"></div>
+    </div>
+
+    <!-- ルールブックは、ステージ選択の上にも重ねるので、最後に置く -->
+    <div id="rules" hidden>
+      <h2 id="rulesTitle"></h2>
+      <div id="rulesTabs">
+        <button id="rulesTabStage" type="button"></button>
+        <button id="rulesTabGeneral" type="button"></button>
+      </div>
+      <div id="rulesList"></div>
+      <button id="rulesClose" type="button"></button>
     </div>
   </div>
   <script type="module" src="/src/main.ts"></script>

@@ -1,7 +1,7 @@
 // このゲームの画面。盤を描き、タップを発射に直して、外枠（shell）に渡す。
 import { DIRS, boardCells, dirTo, hexOf, inBoard, keyOf, type Hex } from '../game/hex';
 import { LEVELS, PLATE_INTRO_AT, PUSH_INTRO_AT } from '../game/levels';
-import { createState, fire, lightLeft, starsOf, type Shot, type ShotResult, type State, type TireKind } from '../game/rules';
+import { createState, fire, lightLeft, starsOf, type Level, type Shot, type ShotResult, type State, type TireKind } from '../game/rules';
 import { solveFrom } from '../game/solve';
 import { centerOf, hexAt, hexPath, layoutFor, type HexLayout } from './hexview';
 import { t } from './i18n';
@@ -25,67 +25,103 @@ const HINTS: Record<number, [ja: string, en: string]> = {
   [PLATE_INTRO_AT]: ['水色の板に当たると、矢印の向きへ曲がる。当たるたびに板の向きが入れ替わる', 'A tire turns at a cyan plate, following its arrow. The plate flips each time it is hit'],
 };
 
-// ルールブック。from 番目のステージまで進むと読めるようになる
+// ルールブックの動く絵に使う、小さな盤。ステージとは別に作る（ステージの答えを、先に見せないため）
+const DEMOS = {
+  basic: { radius: 2, rollers: [[-1, 0]], targets: [[1, 0], [-1, 2]], walls: [], heavy: 0, par: 2 },
+  wall: { radius: 2, rollers: [[-2, 1]], targets: [[1, 1]], walls: [[0, 1, 2]], heavy: 0, par: 3 },
+  heavy: { radius: 2, rollers: [[-2, 0]], targets: [[-1, 0], [1, 0]], walls: [[2, 0, 2]], heavy: 1, par: 1 },
+  push: { radius: 2, rollers: [[0, 2], [0, 0]], targets: [[2, -1]], walls: [], heavy: 0, par: 2 },
+  plate: { radius: 2, rollers: [[2, -1]], targets: [[0, -2], [-2, 1]], walls: [], plates: [[0, -1, -1]], heavy: 0, par: 2 },
+} satisfies Record<string, Level>;
+
+// ルールブック。from 番目のステージまで進むと読めるようになる。
+// scope が 'general' の項目は「ゲーム全体のルール」、ほかは「ステージのルール」に入る
 const RULES: RuleEntry[] = [
   {
     from: 0,
-    title: t('キャラとタイヤ', 'Characters and tires'),
+    title: t('タイヤを転がす', 'Rolling a tire'),
     text: t(
-      '黄色いキャラがあなた。キャラのまっすぐ先のマスをタップすると、その向きにタイヤを転がす。点線が、タイヤの通る道。赤い的を全部倒すとクリア。',
-      'The yellow character is you. Tap a cell in a straight line from it to roll a tire that way. The dotted line shows where the tire will go. Knock down every red target to clear the stage.',
+      '黄色いキャラがあなた。点線の先をタップすると、タイヤを転がして的を倒す。赤い的を全部倒すとクリア。',
+      'The yellow character is you. Tap along a dotted line to roll a tire and knock down a target. Knock down every red target to clear the stage.',
     ),
-  },
-  {
-    from: 0,
-    title: t('星と発射数', 'Stars and shots'),
-    text: t(
-      '右上の「★3 は ○ 発」が、一番少ない発射数。その数で倒しきると ★3、1発多いと ★2。持っているタイヤの数は、下のボタンに書いてある。全部使っても的が残ると失敗。',
-      'The ★3 number at the top is the fewest shots possible. Match it for ★3; one more gives ★2. The buttons below show how many tires you have. If you use them all and a target is still standing, you fail.',
-    ),
-  },
-  {
-    from: 0,
-    title: t('1手戻す・やり直す', 'Undo and retry'),
-    text: t('↶ で1手戻す。↻ でステージを最初からやり直す。', '↶ takes back one shot. ↻ restarts the stage.'),
-  },
-  {
-    from: 0,
-    title: t('詰まった時', 'When you are stuck'),
-    text: t(
-      '同じステージで 2 回失敗すると「ヒント」のボタンが出る。押すと、次の1手を白い線で教える。何度でも使える。4 回失敗すると、失敗の画面に「飛ばす」が出る。集めた星を 3 つ払って、次のステージへ進める。',
-      'Fail a stage twice and a Hint button appears. It shows the next shot as a white line, as often as you like. Fail four times and a Skip button appears on the fail screen: pay 3 of your stars to move on.',
-    ),
+    demo: demoOf(DEMOS.basic),
   },
   {
     from: 1,
     title: t('壁', 'Walls'),
     text: t(
-      'タイヤは壁に当たると止まる。軽いタイヤは、壁を1段削る。中に明るい六角形がある壁は2段あり、軽いタイヤなら2発かかる。',
-      'A tire stops at a wall. A light tire chips off one layer. A wall with a bright hexagon inside has two layers, so it takes two light tires.',
+      'タイヤは壁で止まる。軽いタイヤは、1発で壁を1段削る。中に明るい六角形がある壁は2段。',
+      'A tire stops at a wall. A light tire chips off one layer per shot. A wall with a bright hexagon inside has two layers.',
     ),
+    demo: demoOf(DEMOS.wall),
   },
   {
     from: 2,
     title: t('重いタイヤ', 'Heavy tires'),
     text: t(
-      '的を倒しても止まらず、貫いて進む。壁は、何段あっても1発で壊す（壁では止まる）。軽いタイヤとは別に数が決まっていて、★3 を取るには全部使う。',
-      'It keeps rolling through targets. It smashes a wall of any thickness in one shot (and stops there). They are counted separately from light tires, and ★3 needs every one of them.',
+      '下のボタンで選ぶ。的を貫いて進み、壁は何段あっても1発で壊す（壁では止まる）。',
+      'Pick it with the button below. It rolls straight through targets and smashes a wall of any thickness in one shot (and stops there).',
     ),
+    demo: demoOf(DEMOS.heavy),
   },
   {
     from: PUSH_INTRO_AT,
     title: t('仲間を押す', 'Pushing a partner'),
     text: t(
-      'キャラが2人以上いる時は、キャラをタップして撃つ人を選ぶ。仲間にタイヤを当てると、仲間は1マス押されて動き、狙える線が変わる。先のマスがふさがっている時は動かない。点線の枠が、動く先。仲間をタップすると撃つ人が替わるので、押したい時は、仲間の向こう側のマス（点線の枠）をタップする。',
-      'With two or more characters, tap one to choose who fires. A tire that hits a partner pushes them one cell, changing what they can aim at. They do not move if the next cell is blocked. The dashed frame shows where they will land. Tapping a partner selects them, so to push, tap the cell beyond them (the dashed frame).',
+      '仲間の向こう側（点線の枠）をタップすると、タイヤが当たって、仲間が1マス動く。先がふさがっていると動かない。キャラをタップすると、撃つ人が替わる。',
+      'Tap beyond your partner (the dashed frame) to hit them with a tire and push them one cell. They do not move if that cell is blocked. Tap a character to switch who fires.',
     ),
+    demo: demoOf(DEMOS.push),
   },
   {
     from: PLATE_INTRO_AT,
     title: t('向きを変える板', 'Turning plates'),
     text: t(
-      '水色の板に当たったタイヤは、矢印の向きへ曲がって進み続ける。当たるたびに、板の矢印が逆向きに入れ替わる。曲がった先のマスをタップしても撃てる。',
-      'A tire that hits a cyan plate turns the way its arrow points and keeps rolling. The arrow flips each time the plate is hit. You can also tap a cell beyond the bend to fire.',
+      '水色の板に当たったタイヤは、矢印の向きへ曲がる。当たるたびに、矢印が逆向きになる。',
+      'A tire that hits a cyan plate turns the way its arrow points. The arrow flips each time the plate is hit.',
+    ),
+    demo: demoOf(DEMOS.plate),
+  },
+  {
+    from: 0,
+    scope: 'general',
+    title: t('星', 'Stars'),
+    text: t(
+      '右上の「★3 は ○ 発」が、一番少ない発射数。その数でクリアすると ★3、1発多いと ★2。',
+      'The ★3 number at the top is the fewest shots possible. Clear in that many for ★3; one more gives ★2.',
+    ),
+  },
+  {
+    from: 0,
+    scope: 'general',
+    title: t('タイヤの数と失敗', 'Tires and failing'),
+    text: t(
+      '下のボタンの数が、持っているタイヤ。使い切っても的が残ると失敗。当てられる物が無くなった時も失敗。',
+      'The buttons below show how many tires you have. If you use them all and a target is still standing, you fail. You also fail when nothing can be hit any more.',
+    ),
+  },
+  {
+    from: 0,
+    scope: 'general',
+    title: t('ステージ', 'Stages'),
+    text: t('クリアした一番先のステージの、2つ先まで遊べる。', 'You can play up to two stages past the furthest one you have cleared.'),
+  },
+  {
+    from: 0,
+    scope: 'general',
+    title: t('上のボタン', 'Buttons at the top'),
+    text: t(
+      '☰ ステージ選択　↶ 1手戻す　↻ 最初からやり直す　？ ルール　🔊 音',
+      '☰ stages   ↶ undo one shot   ↻ restart   ？ rules   🔊 sound',
+    ),
+  },
+  {
+    from: 0,
+    scope: 'general',
+    title: t('詰まった時', 'When you are stuck'),
+    text: t(
+      '同じステージで 2 回失敗すると、下に「ヒント」が出る。次の1手を白い線で教える。何度でも使える。4 回失敗すると「飛ばす」が出る。集めた星を 3 つ払って、次のステージへ進む。',
+      'Fail a stage twice and a Hint button appears below. It shows the next shot as a white line, as often as you like. Fail four times and a Skip button appears: pay 3 of your stars to move on.',
     ),
   },
 ];
@@ -355,6 +391,95 @@ function draw(ctx: CanvasRenderingContext2D, state: State, anim: Anim<State, Sho
 /** 動きを見せている間のタイヤの種類（撃った後に選択が切り替わることがあるので、別に持つ） */
 let kindShown: TireKind = 'light';
 
+/** タップする所の印。白い点と、広がる輪 */
+function drawTap(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, ms: number): void {
+  const { x, y } = centerOf(layout, cell);
+  const pulse = (ms % 600) / 600;
+  ctx.beginPath();
+  ctx.arc(x, y, layout.size * 0.2, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x, y, layout.size * (0.25 + 0.45 * pulse), 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(255,255,255,${1 - pulse})`;
+  ctx.lineWidth = 8;
+  ctx.stroke();
+}
+
+/**
+ * ルールブックの動く絵。小さな盤を、一番少ない撃ち方の通りに撃って見せ、終わったら最初から繰り返す。
+ * 遊ぶ時と同じ draw で描くので、見た目はステージと同じになる。
+ */
+function demoOf(level: Level): (ctx: CanvasRenderingContext2D, ms: number) => void {
+  // 場面を順に並べたもの。1つの場面は「何 ms の間、どう描くか」
+  let scenes: { ms: number; paint(ctx: CanvasRenderingContext2D, at: number): void }[] | null = null;
+  const paint = (ctx: CanvasRenderingContext2D, state: State, anim: Anim<State, ShotResult> | null, who: number, tire: TireKind): void => {
+    // draw は、今選んでいるキャラとタイヤを見て描く。遊んでいる途中の選択を壊さないように、描いたら戻す
+    const keep = { selected, kind, kindShown, hint };
+    selected = who;
+    kind = tire;
+    kindShown = tire;
+    hint = null;
+    draw(ctx, state, anim);
+    ({ selected, kind, kindShown, hint } = keep);
+    if (level.heavy === 0) return;
+    // どちらのタイヤを選んでいるかを、下に書く
+    ctx.font = '700 40px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = tire === 'heavy' ? COLORS.select : '#cfd8dc';
+    ctx.fillText(tire === 'heavy' ? t('重いタイヤ', 'Heavy tire') : t('軽いタイヤ', 'Light tire'), VIEW.width / 2, VIEW.height - 40);
+  };
+  const build = () => {
+    const list: NonNullable<typeof scenes> = [];
+    let state = createState(level);
+    let who = 0;
+    for (const shot of solveFrom(state, state.limit)?.shots ?? []) {
+      const before = state;
+      const result = fire(before, shot);
+      if (!result) break;
+      const layout = layoutOf(before);
+      if (shot.roller !== who) {
+        // 撃つ人を替える所。替える先のキャラをタップする
+        const from = who;
+        list.push({ ms: 900, paint: (ctx, at) => { paint(ctx, before, null, from, shot.kind); drawTap(ctx, layout, hexOf(before.rollers[shot.roller]), at); } });
+        who = shot.roller;
+      }
+      // 狙う所。押す時は仲間の向こう側、ほかはタイヤが最後に通るマスをタップする
+      const inside = result.path.filter(([q, r]) => inBoard(q, r, before.radius));
+      const tapAt = result.pushed >= 0 ? hexOf(result.state.rollers[result.pushed]) : inside[inside.length - 1];
+      list.push({ ms: 1300, paint: (ctx, at) => { paint(ctx, before, null, shot.roller, shot.kind); if (tapAt && at > 600) drawTap(ctx, layout, tapAt, at); } });
+      const roll = 110 * result.path.length + 150;
+      list.push({ ms: roll, paint: (ctx, at) => paint(ctx, result.state, { from: before, events: result, t: at / roll }, shot.roller, shot.kind) });
+      state = result.state;
+    }
+    const last = state, lastWho = who;
+    list.push({ ms: 1500, paint: (ctx) => paint(ctx, last, null, lastWho, 'light') });
+    return list;
+  };
+  return (ctx, ms) => {
+    scenes ??= build();
+    let at = ms % scenes.reduce((sum, scene) => sum + scene.ms, 0);
+    for (const scene of scenes) {
+      if (at < scene.ms) return scene.paint(ctx, at);
+      at -= scene.ms;
+    }
+  };
+}
+
+/** まだタイヤは残っているが、どう撃っても盤が変わらない（当てられる物が無い）。この先は倒しきれないので、失敗にする */
+const stuckOf = new WeakMap<State, boolean>();
+function stuck(state: State): boolean {
+  if (state.status !== 'playing') return false;
+  let known = stuckOf.get(state);
+  if (known === undefined) {
+    const tires: TireKind[] = ['light', 'heavy'];
+    known = !state.rollers.some((_, roller) => DIRS.some((_, dir) => tires.some((tire) => fire(state, { roller, dir, kind: tire })?.changed)));
+    stuckOf.set(state, known);
+  }
+  return known;
+}
+
 export const game: GameDef<State, ShotResult> = {
   // ステージの並びを変えたら番号を上げる（前の並びの星が、別のステージに付いてしまうため）
   saveKey: 'roller-break.v3',
@@ -387,7 +512,7 @@ export const game: GameDef<State, ShotResult> = {
     kind = 'light';
     return createState(LEVELS[level]);
   },
-  status: (state) => state.status,
+  status: (state) => (stuck(state) ? 'failed' : state.status),
   stars: starsOf,
   counter: (state) => {
     return t(`★3 は ${state.par} 発`, `★3: ${state.par} shots`);
@@ -396,7 +521,7 @@ export const game: GameDef<State, ShotResult> = {
     const hint = HINTS[level];
     return hint ? t(...hint) : '';
   },
-  failText: () => t('タイヤを使い切りました', 'Out of tires'),
+  failText: (state) => (state.status === 'failed' ? t('タイヤを使い切りました', 'Out of tires') : t('当てられる物が、もうありません', 'Nothing left that a tire can hit')),
 
   buttons(state) {
     // 持っているタイヤの数を、ボタンに書く。軽いタイヤと重いタイヤを合わせた数が、あと撃てる数
