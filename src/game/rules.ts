@@ -1,6 +1,6 @@
 // ルール。タイヤを転がして、的を全部倒す。
 // このフォルダ（src/game）は画面の処理に触れない。document・Canvas・Math.random は使わない。
-import { DIRS, inBoard, keyOf, type Hex } from './hex';
+import { DIRS, hexOf, inBoard, keyOf, type Hex } from './hex';
 
 export type TireKind = 'light' | 'heavy';
 export type Status = 'playing' | 'cleared' | 'failed';
@@ -17,6 +17,18 @@ export interface Level {
   heavy: number;
   /** ★3 になる発射数（最少の発射数） */
   par: number;
+  /** false なら、転師は押されても動かない（押すルールを覚える前のステージ） */
+  push?: boolean;
+  /** 鉄の壁。どのタイヤでも壊れず、タイヤはそこで止まる */
+  iron?: Hex[];
+  /** 爆弾の的（targets にも入れる）。倒れると、周りの6マスの的を倒し、壁を1段削る。巻き込んだ爆弾も続けて爆ぜる */
+  bombs?: Hex[];
+  /** 盾付きの的（targets にも入れる）。軽いタイヤでは倒れない（当たると止まる）。重いタイヤか爆弾で倒れる */
+  shields?: Hex[];
+  /** ワープ穴。[q1, r1, q2, r2] で1組。片方に入ったタイヤは、もう片方から同じ向きで出る */
+  warps?: (readonly [q1: number, r1: number, q2: number, r2: number])[];
+  /** 跳ね返す板。タイヤは来た向きへまっすぐ戻る */
+  mirrors?: Hex[];
 }
 
 export interface State {
@@ -28,6 +40,15 @@ export interface State {
   walls: Record<string, number>;
   /** 板が今どちらへ曲げるか。1 は左へ 60°、-1 は右へ 60° */
   plates: Record<string, number>;
+  /** false なら、転師は押されても動かない */
+  push: boolean;
+  // ここから下の5つは、ステージの間ずっと変わらない（的が倒れても、爆弾・盾の印は残るが、その的はもう無い）
+  iron: string[];
+  bombs: string[];
+  shields: string[];
+  /** ワープ穴の行き先。入口 → 出口（両向きに入れる） */
+  warps: Record<string, string>;
+  mirrors: string[];
   heavyLeft: number;
   shots: number;
   par: number;
@@ -48,7 +69,10 @@ export interface ShotResult {
   path: Hex[];
   /** 倒した的が path の何番目にあるか */
   hitAt: number[];
-  end: 'out' | 'wall' | 'target' | 'roller';
+  /** iron は鉄の壁、shield は軽いタイヤが盾付きの的に当たって止まった */
+  end: 'out' | 'wall' | 'target' | 'roller' | 'iron' | 'shield';
+  /** 爆弾が爆ぜた所。at は path の何番目で爆ぜたか、cells は爆弾と、巻き込んだ的・壁 */
+  blasts: { at: number; cells: Hex[] }[];
   /** 押されて動いた転師の番号。動かなかった時は -1 */
   pushed: number;
   /** 盤が変わったか（的が倒れた・壁が削れた・転師が動いた・板の向きが変わった）。変わらない発射は、撃つ意味が無い */
@@ -58,6 +82,8 @@ export interface ShotResult {
 export interface FireOptions {
   /** false にすると、転師は押されても動かない（ステージ作りで「押すのが要るか」を調べるのに使う） */
   push?: boolean;
+  /** false にすると、板で曲がった後のタイヤでは、転師は押されない（ステージ作りで「板で曲げて押すのが要るか」を調べるのに使う） */
+  bentPush?: boolean;
 }
 
 /**
@@ -66,8 +92,11 @@ export interface FireOptions {
  */
 export const lightLeft = (state: State): number => state.limit - state.shots - state.heavyLeft;
 
-/** ★3 の発射数より、何発多く撃てるか。余裕が多いと、考えずに撃っても倒しきれてしまう */
-export const EXTRA_SHOTS = 1;
+/** ★3 の発射数より、何発多く撃てるか。星は、最少で ★3、1発多いと ★2、それより多いと ★1 */
+export const EXTRA_SHOTS = 3;
+
+/** 重いタイヤが壊せる数。的1つで1、壁1段で1と数え、壊しきったらそこで止まる */
+export const HEAVY_POWER = 3;
 
 export function createState(level: Level, limit: number = level.par + EXTRA_SHOTS): State {
   return {
@@ -76,6 +105,12 @@ export function createState(level: Level, limit: number = level.par + EXTRA_SHOT
     targets: level.targets.map(([q, r]) => keyOf(q, r)).sort(),
     walls: Object.fromEntries(level.walls.map(([q, r, stage]) => [keyOf(q, r), stage])),
     plates: Object.fromEntries((level.plates ?? []).map(([q, r, turn]) => [keyOf(q, r), turn])),
+    push: level.push !== false,
+    iron: (level.iron ?? []).map(([q, r]) => keyOf(q, r)),
+    bombs: (level.bombs ?? []).map(([q, r]) => keyOf(q, r)),
+    shields: (level.shields ?? []).map(([q, r]) => keyOf(q, r)),
+    warps: Object.fromEntries((level.warps ?? []).flatMap(([q1, r1, q2, r2]) => [[keyOf(q1, r1), keyOf(q2, r2)], [keyOf(q2, r2), keyOf(q1, r1)]])),
+    mirrors: (level.mirrors ?? []).map(([q, r]) => keyOf(q, r)),
     heavyLeft: level.heavy,
     shots: 0,
     par: level.par,
@@ -89,10 +124,13 @@ const MAX_STEPS = 200;
 
 /**
  * 1発撃った後の状態を新しく返す（元の状態は変えない）。撃てない時は null。
- * タイヤはまっすぐ進む。壁に当たると止まる。軽いタイヤは壁を1段削り、重いタイヤは何段あっても1発で壊す。
- * 軽いタイヤは的を1つ倒して止まり、重いタイヤは的を倒しながら進み続ける。
+ * タイヤはまっすぐ進む。軽いタイヤは、壁に当たると1段削って止まり、的に当たると1つ倒して止まる。
+ * 重いタイヤは、的と壁を合わせて HEAVY_POWER 個まで壊しながら進み、壊しきったところで止まる（的1つで1、壁1段で1）。
  * 板に当たると、板の向きへ 60° 曲がって進み続け、板は逆向きに切り替わる。
  * 転師に当たると止まり、当たった転師は、先のマスが空いていれば1マス押される。
+ * 鉄の壁では止まる（壊れない）。盾付きの的は、軽いタイヤでは倒れず、そこで止まる。
+ * 爆弾の的が倒れると、周りの6マスの的を倒し、壁を1段削る（鉄の壁は削れない）。巻き込んだ爆弾も続けて爆ぜる。
+ * ワープ穴に入ると、組になったもう片方の穴から、同じ向きで出て進み続ける。跳ね返す板では、来た向きへ戻る。
  */
 export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotResult | null {
   if (state.status !== 'playing') return null;
@@ -111,6 +149,35 @@ export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotR
   let pushed = -1;
   let changed = false;
   let dir = shot.dir;
+  /** あと幾つ壊せるか */
+  let power = shot.kind === 'heavy' ? HEAVY_POWER : 1;
+  /** 板で曲がった後か */
+  let bent = false;
+  const blasts: ShotResult['blasts'] = [];
+  /** 的を倒す。爆弾なら、周りを巻き込んで爆ぜる（巻き込んだ爆弾も続けて爆ぜる） */
+  const knock = (key: string) => {
+    targets = targets.filter((t) => t !== key);
+    changed = true;
+    if (!state.bombs.includes(key)) return;
+    const cells = [key];
+    const queue = [key];
+    while (queue.length > 0) {
+      const [cq, cr] = hexOf(queue.shift()!);
+      for (const [dq, dr] of DIRS) {
+        const near = keyOf(cq + dq, cr + dr);
+        if (targets.includes(near)) {
+          targets = targets.filter((t) => t !== near);
+          cells.push(near);
+          if (state.bombs.includes(near)) queue.push(near);
+        } else if (walls[near]) {
+          if (walls[near] > 1) walls[near] -= 1;
+          else delete walls[near];
+          cells.push(near);
+        }
+      }
+    }
+    blasts.push({ at: path.length - 1, cells: cells.map(hexOf) });
+  };
   let [q, r] = from.split(',').map(Number);
 
   while (path.length < MAX_STEPS) {
@@ -124,34 +191,59 @@ export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotR
       end = 'roller';
       const [tq, tr] = [q + DIRS[dir][0], r + DIRS[dir][1]];
       const to = keyOf(tq, tr);
-      const free = inBoard(tq, tr, state.radius) && !walls[to] && !plates[to] && !targets.includes(to) && !rollers.includes(to);
-      if (free && options.push !== false) {
+      const free =
+        inBoard(tq, tr, state.radius) &&
+        !walls[to] && !plates[to] && !targets.includes(to) && !rollers.includes(to) &&
+        !state.iron.includes(to) && !state.warps[to] && !state.mirrors.includes(to);
+      if (free && state.push && options.push !== false && !(bent && options.bentPush === false)) {
         rollers = rollers.map((cell, i) => (i === hitRoller ? to : cell));
         pushed = hitRoller;
         changed = true;
       }
       break;
     }
+    if (state.iron.includes(key)) {
+      end = 'iron';
+      break;
+    }
+    if (state.mirrors.includes(key)) {
+      dir = (dir + 3) % 6;
+      continue;
+    }
+    const exit = state.warps[key];
+    if (exit) {
+      [q, r] = hexOf(exit);
+      path.push([q, r]);
+      continue;
+    }
     const stage = walls[key];
     if (stage) {
-      if (stage > 1 && shot.kind === 'light') walls[key] = stage - 1;
-      else delete walls[key];
-      end = 'wall';
       changed = true;
+      const broken = Math.min(stage, power);
+      power -= broken;
+      if (stage > broken) walls[key] = stage - broken;
+      else delete walls[key];
+      if (power > 0) continue;
+      end = 'wall';
       break;
     }
     const turn = plates[key];
     if (turn) {
       dir = (dir + turn + 6) % 6;
       plates[key] = -turn;
+      bent = true;
       changed = true;
       continue;
     }
     if (targets.includes(key)) {
-      targets = targets.filter((t) => t !== key);
+      if (shot.kind === 'light' && state.shields.includes(key)) {
+        end = 'shield';
+        break;
+      }
       hitAt.push(path.length - 1);
-      changed = true;
-      if (shot.kind === 'light') {
+      knock(key);
+      power -= 1;
+      if (power === 0) {
         end = 'target';
         break;
       }
@@ -173,14 +265,15 @@ export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotR
     },
     path,
     hitAt,
+    blasts,
     end,
     pushed,
     changed,
   };
 }
 
-/** クリアした時の星の数。最少の発射数なら3つ、1発多いと2つ（それより多くは撃てない） */
+/** クリアした時の星の数。最少の発射数なら3つ、1発多いと2つ、それより多いと1つ */
 export function starsOf(state: State): number {
   if (state.status !== 'cleared') return 0;
-  return state.shots <= state.par ? 3 : 2;
+  return state.shots <= state.par ? 3 : state.shots === state.par + 1 ? 2 : 1;
 }

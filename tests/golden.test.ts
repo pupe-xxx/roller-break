@@ -12,4 +12,4 @@ const recorded = JSON.parse(readFileSync(new URL('./golden/golden.json', import.
 
 it(`動作記録（${Object.keys(recorded.cases).length} 場面）と一致する`, () => {
   expect(diffTraces(recorded.cases, goldenCases())).toEqual([]);
-}, 120000); // 全ステージを総当たりで解くので、時間がかかる
+}, 600000); // 全ステージを総当たりで解くので、時間がかかる

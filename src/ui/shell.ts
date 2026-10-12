@@ -71,6 +71,11 @@ export interface GameDef<S, E> {
   /** true なら「1手戻す」ボタンを出す */
   undoable?: boolean;
   /**
+   * ステージを区切りに分ける。blockSize 個ずつ区切り、k 番目（0 から数える）の区切りは、
+   * 集めた星の合計が blockStars × k に届くと開く。書かなければ区切らない
+   */
+  blocks?: { blockSize: number; blockStars: number };
+  /**
    * マウスを乗せている位置を知らせる（盤から出た時と、1手戻した時は x・y とも -1）。
    * 置く前の下見などに使う。描き直しが要る時は true を返す。指で触る端末では呼ばれない
    */
@@ -93,17 +98,14 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     seenRules: [] as number[],
     /** ステージごとの、失敗した回数 */
     fails: [] as number[],
-    /** 飛ばしたステージの番号 */
-    skipped: [] as number[],
-    /** 飛ばすのに使った星の数 */
-    spent: 0,
+    /** ステージごとの、ヒントを使った回数 */
+    hintsUsed: [] as number[],
   });
   const record = save.load();
   // 前の版の保存には無い項目を補う
   record.seenRules ??= [];
   record.fails ??= [];
-  record.skipped ??= [];
-  record.spent ??= 0;
+  record.hintsUsed ??= [];
   sound.setMuted(record.muted);
 
   let level = 0;
@@ -117,25 +119,31 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   // 鍵のかかり方を見たい時は、番地の後ろに ?lock を付ける。
   // 公開用のビルドでは import.meta.env.DEV が false になり、この行ごと消える（星の記録は変えない）
   const unlockAll = import.meta.env.DEV && !new URLSearchParams(location.search).has('lock');
-  /** クリアした一番先のステージの、2つ先まで遊べる（1つ詰まっても先へ進める） */
-  const unlocked = (i: number) => unlockAll || i <= frontier() + 1;
-  /** クリアした一番先のステージの、次のステージ */
-  const frontier = () => {
-    let next = 0;
-    for (let k = 0; k < def.levelCount; k++) if (starsOf(k) > 0 || record.skipped.includes(k)) next = k + 1;
+  const earned = () => record.stars.reduce((sum, n) => sum + (n ?? 0), 0);
+  // 区切り。区切りが無いゲームは、全部で1つの区切りとして扱う
+  const blockSize = def.blocks?.blockSize ?? def.levelCount;
+  const blockOf = (i: number) => Math.floor(i / blockSize);
+  /** k 番目の区切りを開くのに要る、星の合計 */
+  const blockNeed = (k: number) => (def.blocks?.blockStars ?? 0) * k;
+  const blockOpen = (k: number) => earned() >= blockNeed(k);
+  /** その区切りの中で、クリアした一番先のステージの、次のステージ */
+  const frontier = (k: number) => {
+    let next = k * blockSize;
+    for (let i = k * blockSize; i < Math.min((k + 1) * blockSize, def.levelCount); i++) if (starsOf(i) > 0) next = i + 1;
     return next;
   };
+  /** 区切りが開いていて、その区切りの中でクリアした一番先のステージの、2つ先まで遊べる（1つ詰まっても先へ進める） */
+  const unlocked = (i: number) => unlockAll || (blockOpen(blockOf(i)) && i <= frontier(blockOf(i)) + 1);
 
-  // 詰まった時の助け。同じステージで HINT_AFTER 回失敗するとヒントが、SKIP_AFTER 回失敗すると「飛ばす」が出る。
-  // 手元で確かめる時は、番地の後ろに ?help を付けると、最初から出る
-  const HINT_AFTER = 2, SKIP_AFTER = 4, SKIP_COST = 3;
+  // 詰まった時の助け。同じステージで HINT_EVERY 回失敗するたびに、ヒントが1回分増える
+  // （一度に何回も使えると、ヒントの通りに撃つだけで解けてしまう。詰まるほど助けが増える）。
+  // 手元で確かめる時は、番地の後ろに ?help を付けると、最初から何回でも使える
+  const HINT_EVERY = 2;
   const helpAll = import.meta.env.DEV && new URLSearchParams(location.search).has('help');
   const failsOf = (i: number) => record.fails[i] ?? 0;
-  const earned = () => record.stars.reduce((sum, n) => sum + (n ?? 0), 0);
-  /** 飛ばすのに使える星の数 */
-  const wallet = () => earned() - record.spent;
-  const hintOpen = () => !!def.showHint && (helpAll || failsOf(level) >= HINT_AFTER);
-  const skipOpen = () => starsOf(level) === 0 && !record.skipped.includes(level) && level + 1 < def.levelCount && (helpAll || failsOf(level) >= SKIP_AFTER);
+  /** 今のステージで、あと何回ヒントを使えるか */
+  const hintsLeft = () => (helpAll ? Infinity : Math.floor(failsOf(level) / HINT_EVERY) - (record.hintsUsed[level] ?? 0));
+  const hintOpen = () => !!def.showHint && (helpAll || failsOf(level) >= HINT_EVERY);
   /** 広告を見てもらう。広告の無い版（GitHub Pages・手元）では、そのまま通す */
   const reward = async () => platform.name === 'none' || (await platform.rewardedBreak());
 
@@ -196,14 +204,14 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     el('rulesTabGeneral').classList.toggle('selected', rulesTab === 'general');
     if (isNew) listRules(fresh);
     else {
-      const reached = unlockAll ? def.levelCount : Math.max(level, frontier());
+      let reached = level;
+      for (let i = 0; i < def.levelCount; i++) if (unlocked(i)) reached = Math.max(reached, i);
       listRules(all.filter((rule) => rule.from <= reached && (rule.scope === 'general') === (rulesTab === 'general')));
     }
     el('rules').hidden = false;
   };
   const starText = (n: number) => '★'.repeat(n) + '☆'.repeat(3 - n);
 
-  let skipArmed = false; // 「飛ばす」を1回押した所か
   const renderTools = () => {
     const box = el('tools');
     box.replaceChildren();
@@ -224,53 +232,29 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'help';
-      button.textContent = t('💡 ヒント', '💡 Hint');
-      button.addEventListener('click', () => void useHint());
-      box.append(button);
-    }
-    // 飛ばすのは、押し間違いで星を払わないように、2回押して決める
-    if (skipOpen()) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'help';
-      button.disabled = wallet() < SKIP_COST;
+      const left = hintsLeft();
+      button.disabled = left <= 0;
+      const count = left === Infinity ? '∞' : String(left);
       button.textContent = button.disabled
-        ? t(`⏭ 飛ばす（★${SKIP_COST} が要る）`, `⏭ Skip (needs ★${SKIP_COST})`)
-        : skipArmed
-          ? t(`★${SKIP_COST} を払う（今 ★${wallet()}）。もう一度押す`, `Pay ★${SKIP_COST} of ★${wallet()}? Press again`)
-          : t('⏭ 飛ばす', '⏭ Skip');
-      button.addEventListener('click', () => {
-        if (busy) return;
-        if (skipArmed) return void useSkip();
-        skipArmed = true;
-        renderTools();
-      });
+        ? t(`💡 ヒント あと0回（${HINT_EVERY}回失敗で1回増える）`, `💡 Hint ×0 (fail ${HINT_EVERY} more times for one)`)
+        : t(`💡 ヒント あと${count}回`, `💡 Hint ×${count}`);
+      button.addEventListener('click', () => void useHint());
       box.append(button);
     }
   };
 
   const useHint = async () => {
-    if (busy || def.status(state) !== 'playing' || !def.showHint) return;
+    if (busy || def.status(state) !== 'playing' || !def.showHint || hintsLeft() <= 0) return;
     busy = true;
     const ok = await reward();
     busy = false;
     if (!ok) return;
     const text = def.showHint(state);
+    record.hintsUsed[level] = (record.hintsUsed[level] ?? 0) + 1;
+    save.save(record);
     def.draw(ctx, state, anim);
     el('hint').textContent = text;
-  };
-
-  /** 星を払って、今のステージを飛ばす（クリア扱いにして、次のステージへ進む） */
-  const useSkip = async () => {
-    if (busy || !skipOpen() || wallet() < SKIP_COST) return;
-    busy = true;
-    const ok = await reward();
-    busy = false;
-    if (!ok) return;
-    record.spent += SKIP_COST;
-    record.skipped.push(level);
-    save.save(record);
-    void play(level + 1, false);
+    renderTools();
   };
 
   const render = () => {
@@ -280,7 +264,6 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     el('hint').textContent = def.hint(level);
     el('muteBtn').textContent = sound.muted ? '🔇' : '🔊';
     el<HTMLButtonElement>('undoBtn').disabled = history.length === 0 || def.status(state) !== 'playing';
-    skipArmed = false;
     renderTools();
   };
 
@@ -292,16 +275,27 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
     const box = el('levels');
     box.replaceChildren();
     for (let i = 0; i < def.levelCount; i++) {
+      // 区切りの頭に、見出しを出す。閉じている区切りには、開くのに要る星の数を書く
+      if (def.blocks && i % blockSize === 0) {
+        const k = blockOf(i);
+        const head = document.createElement('h2');
+        head.className = 'block';
+        const range = `${i + 1}〜${Math.min(i + blockSize, def.levelCount)}`;
+        head.textContent =
+          blockOpen(k) || unlockAll
+            ? t(`ステージ ${range}`, `Stages ${range}`)
+            : t(`🔒 ステージ ${range}（★${blockNeed(k)} で開く）`, `🔒 Stages ${range} (opens at ★${blockNeed(k)})`);
+        box.append(head);
+      }
       const button = document.createElement('button');
       button.type = 'button';
       button.disabled = !unlocked(i);
-      const mark = !unlocked(i) ? '🔒' : starsOf(i) === 0 && record.skipped.includes(i) ? t('飛ばした', 'skipped') : starText(starsOf(i));
+      const mark = !unlocked(i) ? '🔒' : starText(starsOf(i));
       button.innerHTML = `<b>${i + 1}</b><span>${mark}</span>`;
       button.addEventListener('click', () => void play(i, false));
       box.append(button);
     }
-    const spent = record.spent > 0 ? t(`（飛ばすのに使える星 ${wallet()}）`, ` (${wallet()} left to spend on skips)`) : '';
-    el('total').textContent = `★ ${earned()} / ${def.levelCount * 3}${spent}`;
+    el('total').textContent = `★ ${earned()} / ${def.levelCount * 3}`;
     el('select').hidden = false;
   };
 
@@ -339,11 +333,15 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
       save.save(record);
       sound.tone(180, 400);
     }
-    const hasNext = level + 1 < def.levelCount;
+    const hasNext = level + 1 < def.levelCount && unlocked(level + 1);
+    // 次の区切りがまだ閉じている時は、あと幾つ星が要るかを書く
+    const nextBlock = blockOf(level) + 1;
+    const blocked = cleared && !!def.blocks && level + 1 === nextBlock * blockSize && level + 1 < def.levelCount && !blockOpen(nextBlock);
     el('resultTitle').textContent = cleared ? t('クリア！', 'Cleared!') : t('失敗', 'Failed');
     el('resultStars').textContent = cleared ? starText(stars) : '';
     el('resultNote').textContent = cleared
-      ? stars === 3 ? t('最少の手数です', 'Best possible!') : t('もっと少ない手数で解けます', 'It can be done in fewer moves')
+      ? (stars === 3 ? t('最少の手数です', 'Best possible!') : t('もっと少ない手数で解けます', 'It can be done in fewer moves')) +
+        (blocked ? t(`　次のステージは ★${blockNeed(nextBlock)} で開く（今 ★${earned()}）`, `  The next stages open at ★${blockNeed(nextBlock)} (you have ★${earned()})`) : '')
       : def.failText(state);
     el('resultNext').hidden = !(cleared && hasNext);
     el('result').classList.toggle('failed', !cleared);
@@ -465,7 +463,7 @@ export async function runGame<S, E>(def: GameDef<S, E>): Promise<void> {
   el('rulesTabStage').textContent = t('ステージのルール', 'Stage rules');
   el('rulesTabGeneral').textContent = t('ゲーム全体のルール', 'Game rules');
   // マウスを乗せた時に、ボタンの名前を出す
-  el('menuBtn').title = t('ステージ選択', 'Stages');
+  el('menuBtn').title = t('ホーム（ステージ選択）', 'Home (stages)');
   el('undoBtn').title = t('1手戻す', 'Undo one move');
   el('retryBtn').title = t('最初からやり直す', 'Restart the stage');
   el('rulesBtn').title = t('ルール', 'Rules');
