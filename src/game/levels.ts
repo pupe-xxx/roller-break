@@ -23,8 +23,8 @@ const COMBO_INTRO: Level = { radius: 2, rollers: [[0, -2], [-1, 0]], targets: [[
 // 鉄の壁は、重いタイヤでも壊れない。鉄の向こうの的は、仲間を押して、回り込んで倒す
 const IRON_INTRO: Level = { radius: 2, rollers: [[0, 0], [-1, 1]], targets: [[-2, 0], [2, -2]], walls: [], iron: [[-1, 0]], heavy: 0, par: 3 };
 
-// 爆弾の的を倒すと、隣の的も一緒に倒れる
-const BOMB_INTRO: Level = { radius: 2, rollers: [[0, -1]], targets: [[1, -1], [0, 0], [0, 2]], bombs: [[1, -1]], walls: [], heavy: 0, par: 2 };
+// 爆弾に当てると爆ぜて、隣の的が一緒に倒れる（爆弾は倒さなくてもよい）
+const BOMB_INTRO: Level = { radius: 2, rollers: [[-2, 0]], targets: [[1, 0], [1, -1], [0, 1], [-2, 2]], bombs: [[0, 0]], walls: [], heavy: 0, par: 2 };
 
 // 盾付きの的は、重いタイヤでないと倒れない
 const SHIELD_INTRO: Level = { radius: 2, rollers: [[2, -2]], targets: [[0, -2], [0, 0], [-1, 1]], shields: [[0, -2]], walls: [], heavy: 1, par: 3 };

@@ -3,9 +3,9 @@
 // 乱数の種は固定なので、何度実行しても同じステージができる。段階（TIERS）を変えた時だけ中身が変わる。
 import { writeFileSync } from 'node:fs';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
-import { boardCells, dirTo, keyOf, type Hex } from '../src/game/hex';
+import { boardCells, dirTo, hexDist, keyOf, type Hex } from '../src/game/hex';
 import { createState, fire, type Level, type State } from '../src/game/rules';
-import { TooManyStates, solve } from '../src/game/solve';
+import { TooManyStates, solve, solveFrom } from '../src/game/solve';
 import { createRng, type Rng } from '../src/kit/rng';
 
 type Range = readonly [min: number, max: number];
@@ -24,7 +24,7 @@ interface Tier {
   needPush?: boolean;
   // 41 より後に出てくる要素の数。書かなければ置かない（書かない段階は、乱数の使い方も前と同じ）
   iron?: Range;
-  /** 的のうち、爆弾にする数 */
+  /** 爆弾の数。的の隣の、的の線の上のマスに置く */
   bombs?: Range;
   /** 的のうち、盾付きにする数 */
   shields?: Range;
@@ -35,6 +35,11 @@ interface Tier {
   need?: 'iron' | 'bombs' | 'shields' | 'warps' | 'mirrors';
   /** 最初から狙える的の数の上限。書かなければ、的3つに1つまで */
   maxOpen?: number;
+  /**
+   * 爆ぜさせる時を選ばせる。最初の1発で爆弾を爆ぜさせると、最少の発射数では解けない。
+   * どれかの爆弾の隣に、板か跳ね返す板がある（爆ぜさせると、使えるはずの物も壊れる）
+   */
+  bombTiming?: boolean;
   /** 押すのを覚える前の段階。転師は押されても動かない */
   noPush?: boolean;
   /** 板が無いと、最少の発射数では解けないステージだけ残す */
@@ -68,8 +73,8 @@ const TIERS: Tier[] = [
   { radius: 4, rollers: [2, 2], targets: [5, 7], walls: [6, 10], heavy: [1, 2], plates: [2, 3], par: [7, 9], maxLucky: 0.02, minChoices: 8, needPush: true, needPlate: true, bentPushHalf: true, maxStates: 60000, count: 9 },
   // 51〜60。鉄の壁（9）
   { radius: 4, rollers: [2, 2], targets: [5, 7], walls: [5, 8], heavy: [1, 2], plates: [1, 3], iron: [1, 3], par: [7, 9], maxLucky: 0.02, minChoices: 8, bentPushHalf: true, need: 'iron', maxStates: 60000, count: 9 },
-  // 61〜70。爆弾の的（9）
-  { radius: 4, rollers: [2, 3], targets: [6, 8], walls: [6, 9], heavy: [1, 2], plates: [1, 3], iron: [0, 2], bombs: [1, 2], par: [8, 10], maxLucky: 0.01, minChoices: 10, need: 'bombs', maxStates: 60000, count: 9 },
+  // 61〜70。爆弾（9）。爆ぜさせる時を間違えると解けない
+  { radius: 4, rollers: [2, 3], targets: [6, 8], walls: [6, 9], heavy: [1, 2], plates: [2, 3], iron: [0, 2], bombs: [1, 2], par: [8, 10], maxLucky: 0.01, minChoices: 10, need: 'bombs', bombTiming: true, maxStates: 60000, count: 9 },
   // 71〜80。盾付きの的（9）
   { radius: 4, rollers: [2, 3], targets: [6, 8], walls: [6, 9], heavy: [1, 2], plates: [1, 3], iron: [0, 2], bombs: [0, 1], shields: [1, 2], par: [8, 10], maxLucky: 0.01, minChoices: 10, need: 'shields', maxStates: 60000, count: 9 },
   // 81〜90。ワープ穴（9）
@@ -119,7 +124,10 @@ function randomLevel(rng: Rng, tier: Tier): Level | null {
   const mirrors = add(tier.mirrors, rest);
   const warpCells = add(tier.warps, free, 2);
   const marked = shuffle(rng, targets.slice());
-  const bombs = add(tier.bombs, marked);
+  // 爆弾は、的の隣のマスにだけ置く（隣に何も無い爆弾は、爆ぜても何も起きない）
+  const nearTarget = rest.filter((cell) => targets.some((target) => hexDist(cell, target) === 1));
+  const bombs = add(tier.bombs, nearTarget);
+  for (const bomb of bombs) rest.splice(rest.indexOf(bomb), 1);
   const shields = add(tier.shields, marked);
   if (iron.length > 0) level.iron = iron;
   if (mirrors.length > 0) level.mirrors = mirrors;
@@ -137,7 +145,7 @@ function choices(level: Level): number {
     for (let dir = 0; dir < 6; dir++) {
       for (const kind of ['light', 'heavy'] as const) {
         const result = fire(start, { roller, dir, kind });
-        if (result?.changed) seen.add(JSON.stringify([result.state.targets, result.state.walls, result.state.rollers, result.state.plates, result.state.heavyLeft]));
+        if (result?.changed) seen.add(JSON.stringify([result.state.targets, result.state.walls, result.state.rollers, result.state.plates, result.state.bombs, result.state.mirrors, result.state.heavyLeft]));
       }
     }
   });
@@ -167,7 +175,7 @@ function luckyRate(level: Level, par: number, maxStates = MAX_STATES): number {
     if (memo.size > maxStates * 4) throw new TooManyStates();
     if (state.status === 'cleared') return 1;
     if (state.status === 'failed') return 0;
-    const key = `${state.shots}|${state.heavyLeft}|${state.targets.join(';')}|${Object.entries(state.walls).sort().join(';')}|${state.rollers.join(';')}|${Object.entries(state.plates).sort().join(';')}`;
+    const key = `${state.shots}|${state.heavyLeft}|${state.targets.join(';')}|${Object.entries(state.walls).sort().join(';')}|${state.rollers.join(';')}|${Object.entries(state.plates).sort().join(';')}|${state.bombs.join(';')}|${state.mirrors.join(';')}`;
     const known = memo.get(key);
     if (known !== undefined) return known;
     const next: State[] = [];
@@ -217,6 +225,21 @@ function accept(level: Level, tier: Tier, bentPush = false): Level | null {
     if (tier.need) {
       const plain: Level = { ...level, [tier.need]: [] };
       if (solve(plain, par, CAP)?.shots.length === par) return null;
+    }
+    // 爆ぜさせる時。最初の1発で爆弾を爆ぜさせると、最少では解けない。どれかの爆弾の隣に、板か跳ね返す板がある
+    if (tier.bombTiming) {
+      const near = (cells: readonly (readonly [number, number, ...number[]])[] | undefined) =>
+        (cells ?? []).some((cell) => (level.bombs ?? []).some((bomb) => hexDist(bomb, [cell[0], cell[1]]) === 1));
+      if (!near(level.plates) && !near(level.mirrors)) return null;
+      const start = createState(level, Infinity);
+      for (let roller = 0; roller < level.rollers.length; roller++) {
+        for (let dir = 0; dir < 6; dir++) {
+          for (const kind of ['light', 'heavy'] as const) {
+            const result = fire(start, { roller, dir, kind });
+            if (result && result.blasts.length > 0 && solveFrom(result.state, par - 1, CAP)) return null;
+          }
+        }
+      }
     }
     // 転師の1人1人（撃つ役でも、押されて止める役でもよい）
     if (level.rollers.length > 1) {

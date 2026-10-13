@@ -19,7 +19,7 @@ export interface Solution {
 const cellsKey = (cells: Record<string, number>): string => Object.keys(cells).sort().map((k) => `${k}=${cells[k]}`).join(';');
 
 const stateKey = (s: State): string =>
-  `${s.targets.join(';')}|${cellsKey(s.walls)}|${s.heavyLeft}|${s.rollers.join(';')}|${cellsKey(s.plates)}`;
+  `${s.targets.join(';')}|${cellsKey(s.walls)}|${s.heavyLeft}|${s.rollers.join(';')}|${cellsKey(s.plates)}|${s.bombs.join(';')}|${s.mirrors.join(';')}`;
 
 /** maxShots 発までで倒しきれなければ null */
 export function solve(level: Level, maxShots: number = 8, options: SolveOptions = {}): Solution | null {

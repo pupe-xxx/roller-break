@@ -21,7 +21,10 @@ export interface Level {
   push?: boolean;
   /** 鉄の壁。どのタイヤでも壊れず、タイヤはそこで止まる */
   iron?: Hex[];
-  /** 爆弾の的（targets にも入れる）。倒れると、周りの6マスの的を倒し、壁を1段削る。巻き込んだ爆弾も続けて爆ぜる */
+  /**
+   * 爆弾。的とは別のマスに置き、倒さなくてもクリアできる。タイヤが当たると爆ぜて、タイヤはそこで止まる。
+   * 周りの6マスの的を倒し、壁を1段削り、板と跳ね返す板を壊す（鉄の壁・ワープ穴・転師はそのまま）。巻き込んだ爆弾も続けて爆ぜる
+   */
   bombs?: Hex[];
   /** 盾付きの的（targets にも入れる）。軽いタイヤでは倒れない（当たると止まる）。重いタイヤか爆弾で倒れる */
   shields?: Hex[];
@@ -42,13 +45,15 @@ export interface State {
   plates: Record<string, number>;
   /** false なら、転師は押されても動かない */
   push: boolean;
-  // ここから下の5つは、ステージの間ずっと変わらない（的が倒れても、爆弾・盾の印は残るが、その的はもう無い）
-  iron: string[];
+  /** 残っている爆弾 */
   bombs: string[];
+  /** 残っている跳ね返す板（爆弾で壊れる） */
+  mirrors: string[];
+  // ここから下の3つは、ステージの間ずっと変わらない（的が倒れても、盾の印は残るが、その的はもう無い）
+  iron: string[];
   shields: string[];
   /** ワープ穴の行き先。入口 → 出口（両向きに入れる） */
   warps: Record<string, string>;
-  mirrors: string[];
   heavyLeft: number;
   shots: number;
   par: number;
@@ -69,9 +74,9 @@ export interface ShotResult {
   path: Hex[];
   /** 倒した的が path の何番目にあるか */
   hitAt: number[];
-  /** iron は鉄の壁、shield は軽いタイヤが盾付きの的に当たって止まった */
-  end: 'out' | 'wall' | 'target' | 'roller' | 'iron' | 'shield';
-  /** 爆弾が爆ぜた所。at は path の何番目で爆ぜたか、cells は爆弾と、巻き込んだ的・壁 */
+  /** iron は鉄の壁、shield は軽いタイヤが盾付きの的に当たって止まった、bomb は爆弾に当たって爆ぜた */
+  end: 'out' | 'wall' | 'target' | 'roller' | 'iron' | 'shield' | 'bomb';
+  /** 爆弾が爆ぜた所。at は path の何番目で爆ぜたか、cells は爆弾と、巻き込んだ物（爆弾・的・壁・板・跳ね返す板） */
   blasts: { at: number; cells: Hex[] }[];
   /** 押されて動いた転師の番号。動かなかった時は -1 */
   pushed: number;
@@ -129,7 +134,8 @@ const MAX_STEPS = 200;
  * 板に当たると、板の向きへ 60° 曲がって進み続け、板は逆向きに切り替わる。
  * 転師に当たると止まり、当たった転師は、先のマスが空いていれば1マス押される。
  * 鉄の壁では止まる（壊れない）。盾付きの的は、軽いタイヤでは倒れず、そこで止まる。
- * 爆弾の的が倒れると、周りの6マスの的を倒し、壁を1段削る（鉄の壁は削れない）。巻き込んだ爆弾も続けて爆ぜる。
+ * 爆弾に当たると、タイヤはそこで止まり、爆弾が爆ぜる。周りの6マスの的を倒し、壁を1段削り、板と跳ね返す板を壊す（鉄の壁・ワープ穴・転師はそのまま）。
+ * 巻き込んだ爆弾も続けて爆ぜる。
  * ワープ穴に入ると、組になったもう片方の穴から、同じ向きで出て進み続ける。跳ね返す板では、来た向きへ戻る。
  */
 export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotResult | null {
@@ -143,6 +149,8 @@ export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotR
   const plates = { ...state.plates };
   let rollers = state.rollers;
   let targets = state.targets;
+  let bombs = state.bombs;
+  let mirrors = state.mirrors;
   const path: Hex[] = [];
   const hitAt: number[] = [];
   let end: ShotResult['end'] = 'out';
@@ -154,26 +162,32 @@ export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotR
   /** 板で曲がった後か */
   let bent = false;
   const blasts: ShotResult['blasts'] = [];
-  /** 的を倒す。爆弾なら、周りを巻き込んで爆ぜる（巻き込んだ爆弾も続けて爆ぜる） */
-  const knock = (key: string) => {
-    targets = targets.filter((t) => t !== key);
+  /** 爆弾を爆ぜさせる。周りの6マスを巻き込み、巻き込んだ爆弾も続けて爆ぜる（1つのマスに置く物は1つなので、マスごとに1つだけ見る） */
+  const explode = (key: string) => {
+    bombs = bombs.filter((b) => b !== key);
     changed = true;
-    if (!state.bombs.includes(key)) return;
     const cells = [key];
     const queue = [key];
     while (queue.length > 0) {
       const [cq, cr] = hexOf(queue.shift()!);
       for (const [dq, dr] of DIRS) {
         const near = keyOf(cq + dq, cr + dr);
-        if (targets.includes(near)) {
+        if (bombs.includes(near)) {
+          bombs = bombs.filter((b) => b !== near);
+          queue.push(near);
+        } else if (targets.includes(near)) {
           targets = targets.filter((t) => t !== near);
-          cells.push(near);
-          if (state.bombs.includes(near)) queue.push(near);
         } else if (walls[near]) {
           if (walls[near] > 1) walls[near] -= 1;
           else delete walls[near];
-          cells.push(near);
+        } else if (plates[near]) {
+          delete plates[near];
+        } else if (mirrors.includes(near)) {
+          mirrors = mirrors.filter((m) => m !== near);
+        } else {
+          continue;
         }
+        cells.push(near);
       }
     }
     blasts.push({ at: path.length - 1, cells: cells.map(hexOf) });
@@ -194,7 +208,7 @@ export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotR
       const free =
         inBoard(tq, tr, state.radius) &&
         !walls[to] && !plates[to] && !targets.includes(to) && !rollers.includes(to) &&
-        !state.iron.includes(to) && !state.warps[to] && !state.mirrors.includes(to);
+        !state.iron.includes(to) && !state.warps[to] && !mirrors.includes(to) && !bombs.includes(to);
       if (free && state.push && options.push !== false && !(bent && options.bentPush === false)) {
         rollers = rollers.map((cell, i) => (i === hitRoller ? to : cell));
         pushed = hitRoller;
@@ -206,7 +220,12 @@ export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotR
       end = 'iron';
       break;
     }
-    if (state.mirrors.includes(key)) {
+    if (bombs.includes(key)) {
+      explode(key);
+      end = 'bomb';
+      break;
+    }
+    if (mirrors.includes(key)) {
       dir = (dir + 3) % 6;
       continue;
     }
@@ -241,7 +260,8 @@ export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotR
         break;
       }
       hitAt.push(path.length - 1);
-      knock(key);
+      targets = targets.filter((t) => t !== key);
+      changed = true;
       power -= 1;
       if (power === 0) {
         end = 'target';
@@ -259,6 +279,8 @@ export function fire(state: State, shot: Shot, options: FireOptions = {}): ShotR
       targets,
       walls,
       plates,
+      bombs,
+      mirrors,
       heavyLeft: state.heavyLeft - (shot.kind === 'heavy' ? 1 : 0),
       shots,
       status,

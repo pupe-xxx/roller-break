@@ -4,6 +4,7 @@ import { BLOCK_SIZE, BOMB_INTRO_AT, COMBO_INTRO_AT, HEAVY_INTRO_AT, IRON_INTRO_A
 import { createState, fire, lightLeft, starsOf, type Level, type Shot, type ShotResult, type State, type TireKind } from '../game/rules';
 import { solveFrom } from '../game/solve';
 import { centerOf, hexAt, hexPath, layoutFor, type HexLayout } from './hexview';
+import rollerUrl from './roller.png';
 import { t } from './i18n';
 import type { Anim, GameDef, RuleEntry } from './shell';
 
@@ -11,26 +12,34 @@ import type { Anim, GameDef, RuleEntry } from './shell';
 const VIEW = { width: 720, height: 720 } as const;
 const COLORS = {
   bg: '#0a111b', cell: '#16243a', grid: '#22344f', aim: 'rgba(255,224,130,0.5)',
-  wall: '#7d8fa3', wallEdge: '#4a5a6e', wall2: '#dfe7ef', target: '#ff3d3d', targetRing: '#ffffff',
-  plate: '#26c6da', plateDark: '#0b3238',
-  iron: '#2e3440', ironEdge: '#8f9bab', bomb: '#1b1b1b', fuse: '#ffab40', shield: '#4fc3f7',
-  mirror: '#cfd8dc', mirrorDark: '#37474f', warps: ['#b388ff', '#ff80ab', '#69f0ae'],
-  rubber: '#1c1f22', sidewall: '#4a5157', lightRim: '#cfd8dc', heavyRim: '#ff9100',
+  wall: '#8d939c', wallLine: '#6c727b', target: '#ff2e4d', targetDark: '#b0132f', targetRing: '#ffd0d8',
+  plate: '#26c6da', plateDark: '#123c44',
+  iron: '#2e3440', ironSide: '#14181e', bronze: '#c19a5b', bomb: '#1b1b1b', fuse: '#ffab40', shield: '#4fc3f7',
+  mirror: '#e3e9ee', mirrorDark: '#59636e', warps: ['#b388ff', '#ff80ab', '#69f0ae'], hole: '#05080d',
+  stone: '#8d939c', stoneLight: '#a7adb5', stoneDark: '#4a4f57', stoneSide: '#30353d', stoneEdge: '#1b1f25', seam: '#4dd0e1', heat: '#ff7a1a',
   roller: '#ffd54f', rollerIdle: '#8d7f58', rollerDark: '#2b2410', skin: '#ffe0b2', select: '#ffe082', tire: '#263238',
 } as const;
+
+// 操作キャラの絵。読み込みが終わってから遊び始める（main.ts）。読み込めなくても、仮の絵で遊べる
+const rollerImage = new Image();
+export const rollerImageReady = new Promise<void>((resolve) => {
+  rollerImage.onload = rollerImage.onerror = () => resolve();
+  setTimeout(resolve, 3000);
+  rollerImage.src = rollerUrl;
+});
 
 /** 次の区切り（BLOCK_SIZE 個）を開くのに要る星。k 番目の区切りは、星の合計が BLOCK_STARS × k に届くと開く（平均 ★2 で届く） */
 const BLOCK_STARS = BLOCK_SIZE * 2;
 
 // 画面の言葉では「転師」と言わず、「キャラ」と言う（初めての人には何のことか分からないため）
 const HINTS: Record<number, [ja: string, en: string]> = {
-  0: ['黄色いキャラがあなた。キャラのまっすぐ先をタップすると、タイヤを転がして的を倒す', 'The yellow character is you. Tap a cell in a straight line from it to roll a tire at a target'],
+  0: ['光る枠のキャラがあなた。キャラのまっすぐ先をタップすると、タイヤを転がして的を倒す', 'The character in the glowing frame is you. Tap a cell in a straight line from it to roll a tire at a target'],
   [WALL_INTRO_AT]: ['壁は、軽いタイヤ1発で1段削れる。先に壁をどかそう', 'A light tire chips one layer off a wall. Clear the wall first'],
   [HEAVY_INTRO_AT]: ['重いタイヤは、的と壁を合わせて3つまで壊して進む。壁は1段で1つと数える', 'A heavy tire breaks up to three things in a row: targets and walls, each wall layer counting as one'],
   [PUSH_INTRO_AT]: ['仲間の向こう側（点線の枠）をタップすると、仲間にタイヤが当たり、1マス押されて動く。キャラをタップすると、撃つ人が替わる', 'Tap beyond your partner (the dashed frame) to hit them with a tire and push them one cell. Tap a character to switch who fires'],
   [PLATE_INTRO_AT]: ['水色の板に当たると、矢印の向きへ曲がる。当たるたびに板の向きが入れ替わる', 'A tire turns at a cyan plate, following its arrow. The plate flips each time it is hit'],
   [IRON_INTRO_AT]: ['鉄の壁は、重いタイヤでも壊れない。向こうの的は、別の向きから狙おう', 'Iron walls never break, even for a heavy tire. Aim at what is behind them from another side'],
-  [BOMB_INTRO_AT]: ['爆弾の的を倒すと、周りの的も一緒に倒れる。壁は1段削れる', 'Knock down a bomb target and the targets around it fall too. Walls around it lose one layer'],
+  [BOMB_INTRO_AT]: ['爆弾にタイヤを当てると爆ぜて、周りの的も一緒に倒れる。爆弾は倒さなくてもクリアできる', 'Roll a tire into a bomb and it explodes, knocking down the targets around it. You do not have to blow up bombs to clear'],
   [SHIELD_INTRO_AT]: ['水色の枠の的は、盾付き。軽いタイヤでは倒れない。重いタイヤか爆弾で倒す', 'A target in a cyan frame has a shield. Light tires bounce off it; use a heavy tire or a bomb'],
   [WARP_INTRO_AT]: ['ワープ穴に入ったタイヤは、同じ番号の穴から、同じ向きのまま出てくる', 'A tire that rolls into a warp hole comes out of the hole with the same number, still heading the same way'],
   [MIRROR_INTRO_AT]: ['跳ね返す板に当たると、タイヤは来た道を戻る。戻ったタイヤは、撃ったキャラも押す', 'A tire bounces straight back off a mirror plate. On the way back, it can push the character who fired it'],
@@ -46,7 +55,7 @@ const DEMOS = {
   plate: { radius: 2, rollers: [[2, -1]], targets: [[0, -2], [-2, 1]], walls: [], plates: [[0, -1, -1]], heavy: 0, par: 2 },
   combo: { radius: 2, rollers: [[0, -2], [1, -1]], targets: [[0, 1]], walls: [], plates: [[0, -1, 1]], heavy: 0, par: 2 },
   iron: { radius: 2, rollers: [[1, 0], [2, 0]], targets: [[-2, 0], [2, -2]], walls: [], iron: [[2, -1]], heavy: 0, par: 3 },
-  bomb: { radius: 2, rollers: [[1, -1]], targets: [[1, 1], [-1, 1], [2, 0]], bombs: [[1, 1]], walls: [], heavy: 0, par: 2 },
+  bomb: { radius: 2, rollers: [[-2, 0]], targets: [[1, -1], [0, 1]], bombs: [[0, 0]], walls: [[-1, 1, 2]], plates: [[1, 0, 1]], heavy: 0, par: 1 },
   shield: { radius: 2, rollers: [[-2, 2]], targets: [[-2, 1], [2, -2], [0, 0]], shields: [[-2, 1]], walls: [], heavy: 1, par: 3 },
   warp: { radius: 2, rollers: [[-1, -1]], targets: [[-2, 2], [2, -1], [0, -1]], warps: [[-1, 1, -2, 0]], walls: [], heavy: 0, par: 3 },
   mirror: { radius: 2, rollers: [[1, 1], [2, -1]], targets: [[0, -2], [0, 2]], mirrors: [[2, 0]], walls: [], heavy: 0, par: 3 },
@@ -59,8 +68,8 @@ const RULES: RuleEntry[] = [
     from: 0,
     title: t('タイヤを転がす', 'Rolling a tire'),
     text: t(
-      '黄色いキャラがあなた。点線の先をタップすると、タイヤを転がして的を倒す。赤い的を全部倒すとクリア。',
-      'The yellow character is you. Tap along a dotted line to roll a tire and knock down a target. Knock down every red target to clear the stage.',
+      '光る枠のキャラがあなた。点線の先をタップすると、タイヤを転がして的を倒す。赤い的を全部倒すとクリア。',
+      'The character in the glowing frame is you. Tap along a dotted line to roll a tire and knock down a target. Knock down every red target to clear the stage.',
     ),
     demo: demoOf(DEMOS.basic),
   },
@@ -120,10 +129,10 @@ const RULES: RuleEntry[] = [
   },
   {
     from: BOMB_INTRO_AT,
-    title: t('爆弾の的', 'Bomb targets'),
+    title: t('爆弾', 'Bombs'),
     text: t(
-      '黒い玉の付いた的は、爆弾。倒れると、周りの6マスにある的を倒し、壁を1段削る（鉄の壁は削れない）。巻き込まれた爆弾も続けて爆ぜる。仲間は巻き込まれない。',
-      'A target with a black bomb on it explodes when it falls. It knocks down the targets in the six cells around it and chips one layer off walls there (not iron). Bombs caught in the blast explode too. Partners are not harmed.',
+      'ひびの光る黒い玉は、爆弾。タイヤが当たると、タイヤはそこで止まり、爆弾が爆ぜる。周りの6マスにある的を倒し、壁を1段削り、板と跳ね返す板を壊す（鉄の壁・ワープ穴・仲間はそのまま）。巻き込まれた爆弾も続けて爆ぜる。爆弾は倒さなくてもクリアできる。使う板を先に使ってから爆ぜさせるなど、爆ぜさせる時を選ぼう。',
+      'A black ball with glowing cracks is a bomb. When a tire hits it, the tire stops and the bomb explodes. It knocks down the targets in the six cells around it, chips one layer off walls, and destroys plates and mirror plates (iron, warp holes and partners are safe). Bombs caught in the blast explode too. You do not have to blow up bombs to clear. Pick the right moment: use a plate first, then blow it away.',
     ),
     demo: demoOf(DEMOS.bomb),
   },
@@ -321,21 +330,47 @@ function drawHint(ctx: CanvasRenderingContext2D, layout: HexLayout, state: State
   }
 }
 
-/** 向きを変える板。丸い矢印が、曲げる向き（左回りか右回りか）を表す */
+/**
+ * 石の台。STRATA の地層のように、暗い側面の上に天面を重ねて、少し盛り上がって見せる。lift は高さ（マスの大きさに対する割合）
+ */
+function slab(ctx: CanvasRenderingContext2D, x: number, y: number, u: number, scale: number, lift: number, top: string, side: string): void {
+  hexPath(ctx, x, y + u * lift, u, scale);
+  ctx.fillStyle = side;
+  ctx.fill();
+  ctx.strokeStyle = COLORS.stoneEdge;
+  ctx.lineWidth = Math.max(2, u * 0.05);
+  ctx.stroke();
+  hexPath(ctx, x, y, u, scale);
+  ctx.fillStyle = top;
+  ctx.fill();
+  ctx.stroke();
+}
+
+/** 光る線のにじみ。描き終わったら glowOff で戻す */
+function glowOn(ctx: CanvasRenderingContext2D, color: string, blur: number): void {
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur;
+}
+function glowOff(ctx: CanvasRenderingContext2D): void {
+  ctx.shadowBlur = 0;
+}
+
+/** 向きを変える板。青緑の石の板に、光る丸い矢印。矢印が、曲げる向き（左回りか右回りか）を表す */
 function drawPlate(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, turn: number): void {
   const { x, y } = centerOf(layout, cell);
   const size = layout.size;
-  hexPath(ctx, x, y, size, 0.84);
-  ctx.fillStyle = COLORS.plateDark;
-  ctx.fill();
+  slab(ctx, x, y, size, 0.82, 0.08, COLORS.plateDark, COLORS.stoneSide);
+  hexPath(ctx, x, y, size, 0.82);
   ctx.strokeStyle = COLORS.plate;
-  ctx.lineWidth = 4;
+  ctx.lineWidth = 3;
   ctx.stroke();
   // 画面では、左へ曲げる（turn = 1）が左回り
   const ccw = turn > 0;
-  const radius = size * 0.36;
+  const radius = size * 0.34;
   const a0 = -Math.PI * 0.5, sweep = Math.PI * 1.4;
   const a1 = ccw ? a0 - sweep : a0 + sweep;
+  glowOn(ctx, COLORS.plate, size * 0.25);
+  ctx.strokeStyle = COLORS.plate;
   ctx.lineCap = 'round';
   ctx.lineWidth = Math.max(4, size * 0.11);
   ctx.beginPath();
@@ -352,36 +387,48 @@ function drawPlate(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, 
   ctx.closePath();
   ctx.fillStyle = COLORS.plate;
   ctx.fill();
+  glowOff(ctx);
 }
 
-/** 鉄の壁。暗い色で、四隅にびょうを打つ（削れる壁と見分ける） */
+/** 鉄の壁。暗い金属の塊に、青銅のふちとびょう（地層の筋は無い。削れる石の壁と見分ける） */
 function drawIron(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex): void {
   const { x, y } = centerOf(layout, cell);
-  hexPath(ctx, x, y, layout.size, 0.88);
-  ctx.fillStyle = COLORS.iron;
-  ctx.fill();
-  ctx.strokeStyle = COLORS.ironEdge;
-  ctx.lineWidth = 5;
+  const u = layout.size;
+  slab(ctx, x, y, u, 0.88, 0.12, COLORS.iron, COLORS.ironSide);
+  hexPath(ctx, x, y, u, 0.88);
+  ctx.strokeStyle = COLORS.bronze;
+  ctx.lineWidth = Math.max(3, u * 0.08);
   ctx.stroke();
-  ctx.fillStyle = COLORS.ironEdge;
+  hexPath(ctx, x, y, u, 0.5);
+  ctx.strokeStyle = COLORS.ironSide;
+  ctx.lineWidth = Math.max(2, u * 0.05);
+  ctx.stroke();
+  ctx.fillStyle = COLORS.bronze;
   for (let i = 0; i < 6; i++) {
     const a = (Math.PI / 3) * i + Math.PI / 6;
     ctx.beginPath();
-    ctx.arc(x + Math.cos(a) * layout.size * 0.5, y + Math.sin(a) * layout.size * 0.5, layout.size * 0.07, 0, Math.PI * 2);
+    ctx.arc(x + Math.cos(a) * u * 0.6, y + Math.sin(a) * u * 0.6, u * 0.075, 0, Math.PI * 2);
     ctx.fill();
   }
 }
 
-/** 跳ね返す板。銀色の六角形に、Uの字に戻る矢印 */
+/** 跳ね返す板。磨いた石の板に、Uの字に戻る矢印 */
 function drawMirror(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex): void {
   const { x, y } = centerOf(layout, cell);
   const u = layout.size;
+  slab(ctx, x, y, u, 0.84, 0.08, COLORS.mirrorDark, COLORS.stoneSide);
   hexPath(ctx, x, y, u, 0.84);
-  ctx.fillStyle = COLORS.mirrorDark;
-  ctx.fill();
   ctx.strokeStyle = COLORS.mirror;
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 4;
   ctx.stroke();
+  // 磨いた面の照り
+  ctx.beginPath();
+  ctx.moveTo(x - u * 0.5, y - u * 0.12);
+  ctx.lineTo(x - u * 0.12, y - u * 0.5);
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = u * 0.08;
+  ctx.stroke();
+  ctx.strokeStyle = COLORS.mirror;
   ctx.lineCap = 'round';
   ctx.lineWidth = Math.max(4, u * 0.1);
   ctx.beginPath();
@@ -399,7 +446,7 @@ function drawMirror(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex)
   ctx.fill();
 }
 
-/** ワープ穴。組ごとに色を変え、同じ番号を書く */
+/** ワープ穴。石のふちで囲んだ暗い穴に、組ごとの色の光る輪と、同じ番号を書く */
 function drawWarps(ctx: CanvasRenderingContext2D, layout: HexLayout, state: State): void {
   const done = new Set<string>();
   let pair = 0;
@@ -411,7 +458,16 @@ function drawWarps(ctx: CanvasRenderingContext2D, layout: HexLayout, state: Stat
     pair++;
     for (const cell of [key, other]) {
       const { x, y } = centerOf(layout, hexOf(cell));
-      for (const [scale, width] of [[0.62, 6], [0.4, 4]] as const) {
+      ctx.beginPath();
+      ctx.arc(x, y, layout.size * 0.7, 0, Math.PI * 2);
+      ctx.fillStyle = COLORS.stoneSide;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x, y, layout.size * 0.58, 0, Math.PI * 2);
+      ctx.fillStyle = COLORS.hole;
+      ctx.fill();
+      glowOn(ctx, color, layout.size * 0.3);
+      for (const [scale, width] of [[0.56, 5], [0.38, 3]] as const) {
         ctx.beginPath();
         ctx.arc(x, y, layout.size * scale, 0, Math.PI * 2);
         ctx.strokeStyle = color;
@@ -423,70 +479,219 @@ function drawWarps(ctx: CanvasRenderingContext2D, layout: HexLayout, state: Stat
       ctx.textBaseline = 'middle';
       ctx.fillStyle = color;
       ctx.fillText(String(pair), x, y + 1);
+      glowOff(ctx);
     }
   }
 }
 
-/** 爆弾の的の印。真ん中に黒い玉と、火の付いた導火線 */
-function drawBombMark(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex): void {
+/** 爆弾。黒い石の玉に、オレンジの熱のひびと、火の付いた導火線。的（赤い結晶）とは別の物として置く */
+function drawBomb(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex): void {
   const { x, y } = centerOf(layout, cell);
   const u = layout.size;
+  const r = u * 0.42;
+  // 影
   ctx.beginPath();
-  ctx.arc(x, y, u * 0.3, 0, Math.PI * 2);
+  ctx.ellipse(x + 2, y + r * 0.85, r * 0.9, r * 0.3, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fill();
+  glowOn(ctx, COLORS.heat, u * 0.35);
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fillStyle = COLORS.bomb;
   ctx.fill();
+  glowOff(ctx);
+  ctx.strokeStyle = COLORS.stoneEdge;
+  ctx.lineWidth = Math.max(2, u * 0.05);
+  ctx.stroke();
+  // 照り
+  ctx.beginPath();
+  ctx.arc(x - r * 0.35, y - r * 0.35, r * 0.22, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.fill();
+  // 熱のひび
+  glowOn(ctx, COLORS.heat, u * 0.2);
+  ctx.strokeStyle = COLORS.heat;
+  ctx.lineWidth = Math.max(2, u * 0.055);
+  ctx.lineJoin = 'round';
+  for (const [a, b] of [[-2.4, -1.2], [0.2, 1.3], [1.9, 2.9]] as const) {
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(a) * r * 0.15, y + Math.sin(a) * r * 0.15);
+    ctx.lineTo(x + Math.cos((a + b) / 2) * r * 0.55, y + Math.sin((a + b) / 2) * r * 0.55);
+    ctx.lineTo(x + Math.cos(b) * r * 0.95, y + Math.sin(b) * r * 0.95);
+    ctx.stroke();
+  }
+  // 導火線と火花
   ctx.strokeStyle = COLORS.fuse;
   ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.moveTo(x + u * 0.18, y - u * 0.22);
-  ctx.quadraticCurveTo(x + u * 0.36, y - u * 0.5, x + u * 0.5, y - u * 0.42);
+  ctx.moveTo(x + r * 0.5, y - r * 0.8);
+  ctx.quadraticCurveTo(x + r * 0.8, y - r * 1.3, x + r * 1.1, y - r * 1.1);
   ctx.stroke();
   ctx.beginPath();
-  ctx.arc(x + u * 0.52, y - u * 0.44, u * 0.09, 0, Math.PI * 2);
+  ctx.arc(x + r * 1.12, y - r * 1.12, u * 0.1, 0, Math.PI * 2);
   ctx.fillStyle = COLORS.fuse;
   ctx.fill();
+  glowOff(ctx);
 }
 
-/** 盾付きの的の印。的を囲む、水色の太い六角形 */
+/** 盾付きの的の印。的を囲む、水色に光る太い六角形の枠 */
 function drawShieldMark(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex): void {
   const { x, y } = centerOf(layout, cell);
   hexPath(ctx, x, y, layout.size, 0.86);
+  ctx.strokeStyle = COLORS.stoneEdge;
+  ctx.lineWidth = 11;
+  ctx.stroke();
+  glowOn(ctx, COLORS.shield, layout.size * 0.3);
   ctx.strokeStyle = COLORS.shield;
-  ctx.lineWidth = 7;
+  ctx.lineWidth = 6;
   ctx.stroke();
-}
-
-function drawWall(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, stage: number): void {
-  const { x, y } = centerOf(layout, cell);
-  hexPath(ctx, x, y, layout.size, 0.84);
-  ctx.fillStyle = COLORS.wall;
-  ctx.fill();
-  ctx.strokeStyle = COLORS.wallEdge;
-  ctx.lineWidth = 4;
-  ctx.stroke();
-  if (stage >= 2) {
-    hexPath(ctx, x, y, layout.size, 0.52);
-    ctx.fillStyle = COLORS.wall2;
-    ctx.fill();
-  }
-}
-
-function drawTarget(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex): void {
-  const { x, y } = centerOf(layout, cell);
-  // 白いふちを付けて、暗い盤の上でも一目で見つかるようにする
-  [0.66, 0.56, 0.36, 0.17].forEach((scale, i) => {
-    ctx.beginPath();
-    ctx.arc(x, y, layout.size * scale, 0, Math.PI * 2);
-    ctx.fillStyle = i % 2 === 0 ? COLORS.targetRing : COLORS.target;
-    ctx.fill();
-  });
+  glowOff(ctx);
 }
 
 /**
- * 操作するキャラ。帽子をかぶった人が、タイヤを抱えている絵で描く（的・壁・板とは形で見分けられる）。
- * 選んでいるキャラは明るい色で、足もとに光る台が付く。選んでいないキャラは色を落とす。
+ * 削れる壁。地層の筋が入った石の塊。
+ * 2段の壁は、同じ石の塊のまわりを、太い暗い石の枠で固める（1段の壁を強くしたものだと分かるように、中は同じ見た目にする）
+ */
+function drawWall(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, stage: number): void {
+  const { x, y } = centerOf(layout, cell);
+  const u = layout.size;
+  const edge = Math.max(2, u * 0.05);
+  slab(ctx, x, y, u, 0.86, 0.14, COLORS.wall, COLORS.stoneSide);
+  ctx.save();
+  hexPath(ctx, x, y, u, 0.86);
+  ctx.clip();
+  // 地層の筋
+  ctx.strokeStyle = COLORS.wallLine;
+  ctx.lineWidth = edge;
+  for (const dy of [-0.3, 0.05, 0.38]) {
+    ctx.beginPath();
+    ctx.moveTo(x - u, y + u * dy);
+    ctx.lineTo(x + u, y + u * (dy - 0.12));
+    ctx.stroke();
+  }
+  // 2段：太い石の枠（枠は六角の外側に太い線を引き、内側だけ残す）
+  if (stage >= 2) {
+    hexPath(ctx, x, y, u, 0.86);
+    ctx.strokeStyle = COLORS.stoneDark;
+    ctx.lineWidth = u * 0.34;
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.strokeStyle = COLORS.stoneEdge;
+  ctx.lineWidth = edge;
+  if (stage >= 2) {
+    hexPath(ctx, x, y, u, 0.69);
+    ctx.stroke();
+    // 枠の石の継ぎ目（角ごと）
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 3) * i - Math.PI / 6;
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(a) * u * 0.69, y + Math.sin(a) * u * 0.69);
+      ctx.lineTo(x + Math.cos(a) * u * 0.86, y + Math.sin(a) * u * 0.86);
+      ctx.stroke();
+    }
+  }
+  hexPath(ctx, x, y, u, 0.86);
+  ctx.stroke();
+}
+
+/**
+ * 的。赤く光る結晶の柱（STRATA の敵軍の色）。とがった頭の六角柱を、明るい面・真ん中の面・暗い面の3つに塗り分け、
+ * 両脇に小さな結晶を2本添える。暗い盤の上でも一目で見つかるように、赤い光でにじませる
+ */
+function drawTarget(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex): void {
+  const { x, y } = centerOf(layout, cell);
+  const u = layout.size;
+  // 足もとの影
+  ctx.beginPath();
+  ctx.ellipse(x, y + u * 0.48, u * 0.5, u * 0.16, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fill();
+  /** 1本の結晶。cx は中心、w は半分の幅、h は高さ（下の端から頭の先まで）、lean は傾き */
+  const crystal = (cx: number, base: number, w: number, h: number, lean: number) => {
+    const tip = base - h;
+    const shoulder = tip + w * 1.3;
+    const skew = (dy: number) => (base - dy) * lean;
+    const pt = (px: number, py: number): [number, number] => [px + skew(py), py];
+    const left = [pt(cx - w, base), pt(cx - w, shoulder), pt(cx, tip), pt(cx - w * 0.2, shoulder + w * 0.2), pt(cx - w * 0.2, base + w * 0.25)];
+    const mid = [pt(cx - w * 0.2, base + w * 0.25), pt(cx - w * 0.2, shoulder + w * 0.2), pt(cx, tip), pt(cx + w * 0.45, shoulder + w * 0.1), pt(cx + w * 0.45, base + w * 0.2)];
+    const right = [pt(cx + w * 0.45, base + w * 0.2), pt(cx + w * 0.45, shoulder + w * 0.1), pt(cx, tip), pt(cx + w, shoulder), pt(cx + w, base)];
+    const face = (pts: [number, number][], color: string) => {
+      ctx.beginPath();
+      pts.forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+    };
+    face(mid, COLORS.target);
+    face(left, COLORS.targetRing);
+    face(right, COLORS.targetDark);
+    // 輪郭
+    ctx.beginPath();
+    [pt(cx - w, base), pt(cx - w, shoulder), pt(cx, tip), pt(cx + w, shoulder), pt(cx + w, base), pt(cx + w * 0.45, base + w * 0.2), pt(cx - w * 0.2, base + w * 0.25)].forEach(([px, py], i) =>
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py),
+    );
+    ctx.closePath();
+    ctx.strokeStyle = COLORS.stoneEdge;
+    ctx.lineWidth = Math.max(1.5, u * 0.04);
+    ctx.stroke();
+  };
+  glowOn(ctx, COLORS.target, u * 0.5);
+  ctx.beginPath();
+  ctx.arc(x, y, u * 0.3, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,46,77,0.35)';
+  ctx.fill();
+  glowOff(ctx);
+  crystal(x - u * 0.3, y + u * 0.42, u * 0.12, u * 0.45, -0.25);
+  crystal(x + u * 0.3, y + u * 0.42, u * 0.12, u * 0.5, 0.25);
+  crystal(x, y + u * 0.48, u * 0.2, u * 1.0, 0);
+  // きらめき
+  const sx = x - u * 0.08, sy = y - u * 0.2, sr = u * 0.12;
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - sr);
+  ctx.lineTo(sx + sr * 0.25, sy - sr * 0.25);
+  ctx.lineTo(sx + sr, sy);
+  ctx.lineTo(sx + sr * 0.25, sy + sr * 0.25);
+  ctx.lineTo(sx, sy + sr);
+  ctx.lineTo(sx - sr * 0.25, sy + sr * 0.25);
+  ctx.lineTo(sx - sr, sy);
+  ctx.lineTo(sx - sr * 0.25, sy - sr * 0.25);
+  ctx.closePath();
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+}
+
+/**
+ * 操作するキャラ。STRATA の転師の絵（roller.png）で描く。絵が読み込めない時は、コードで描いた仮の絵に戻す。
+ * 選んでいるキャラは、足もとに光る六角の台が付く。選んでいないキャラは、絵の色を落とす
  */
 function drawRoller(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, active: boolean): void {
+  if (!rollerImage.complete || rollerImage.naturalWidth === 0) {
+    drawRollerShape(ctx, layout, cell, active);
+    return;
+  }
+  const { x, y } = centerOf(layout, cell);
+  const u = layout.size;
+  if (active) {
+    hexPath(ctx, x, y, u, 0.92);
+    ctx.fillStyle = 'rgba(255,213,79,0.22)';
+    ctx.fill();
+    ctx.strokeStyle = COLORS.select;
+    ctx.lineWidth = 4;
+    ctx.stroke();
+  }
+  const side = u * 1.7;
+  ctx.save();
+  if (!active) {
+    ctx.filter = 'grayscale(0.7) brightness(0.6)';
+    ctx.globalAlpha = 0.85;
+  }
+  ctx.drawImage(rollerImage, x - side / 2, y - side / 2, side, side);
+  ctx.restore();
+}
+
+/** 絵が読み込めない時の、コードで描いた仮のキャラ。帽子をかぶった人が、タイヤを抱えている */
+function drawRollerShape(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex, active: boolean): void {
   const { x, y } = centerOf(layout, cell);
   const u = layout.size;
   const body = active ? COLORS.roller : COLORS.rollerIdle;
@@ -536,71 +741,85 @@ function drawRoller(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex,
 }
 
 /**
- * 転がっているタイヤ。黒いゴムの輪の外側に溝（トレッド）を刻み、内側にホイールとナットを描く。spin は回った角度。
- * 軽いタイヤは小さく、細かい溝と銀色のホイール。重いタイヤは大きく、ゴツゴツの大きな溝とオレンジのホイール
+ * 転がっているタイヤ。STRATA の転師が転がす、石の車輪で描く：石の塊を並べた外輪、内側の石の面、六角形のハブ。spin は回った角度。
+ * 軽いタイヤは小さく、石の継ぎ目に青緑の光（STRATA の地層の光）。重いタイヤは大きく、面にオレンジの熱のひびが走る
  */
 function drawTire(ctx: CanvasRenderingContext2D, layout: HexLayout, x: number, y: number, heavy: boolean, spin = 0): void {
   const u = layout.size;
-  const outer = u * (heavy ? 0.56 : 0.38);
-  const inner = outer * (heavy ? 0.5 : 0.56);
-  const lugs = heavy ? 10 : 16;
+  const r = u * (heavy ? 0.56 : 0.4);
+  const rim = r * 0.28;
+  const glow = heavy ? COLORS.heat : COLORS.seam;
+  const blocks = heavy ? 10 : 8;
+  const edge = Math.max(2, u * 0.035);
   ctx.save();
   ctx.translate(x, y);
-  ctx.rotate(spin);
-  // 溝のブロック。輪の外へ少し出して、ギザギザの縁にする
-  ctx.fillStyle = COLORS.rubber;
-  for (let i = 0; i < lugs; i++) {
-    const a = ((Math.PI * 2) / lugs) * i;
-    const half = (Math.PI / lugs) * (heavy ? 0.62 : 0.5);
-    const out = outer * (heavy ? 1.12 : 1.07);
-    ctx.beginPath();
-    ctx.moveTo(Math.cos(a - half) * outer * 0.9, Math.sin(a - half) * outer * 0.9);
-    ctx.lineTo(Math.cos(a - half * 0.8) * out, Math.sin(a - half * 0.8) * out);
-    ctx.lineTo(Math.cos(a + half * 0.8) * out, Math.sin(a + half * 0.8) * out);
-    ctx.lineTo(Math.cos(a + half) * outer * 0.9, Math.sin(a + half) * outer * 0.9);
-    ctx.closePath();
-    ctx.fill();
-  }
-  // ゴムの輪と、側面の少し明るい線
+  // 影（STRATA の駒と同じく、右下に少しずらす）
   ctx.beginPath();
-  ctx.arc(0, 0, outer, 0, Math.PI * 2);
+  ctx.arc(2, 3, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.fill();
+  ctx.rotate(spin);
+  // 外輪の石。光る色の下地に、少し隙間を空けて石の塊を並べる（隙間が光る継ぎ目になる）
   ctx.beginPath();
-  ctx.arc(0, 0, (outer + inner) / 2, 0, Math.PI * 2);
-  ctx.strokeStyle = COLORS.sidewall;
-  ctx.lineWidth = Math.max(2, u * 0.03);
-  ctx.stroke();
-  // 溝の切れ目（ゴムの輪に刻む）
-  ctx.strokeStyle = '#000000';
-  ctx.lineWidth = Math.max(2, u * (heavy ? 0.04 : 0.025));
-  for (let i = 0; i < lugs; i++) {
-    const a = ((Math.PI * 2) / lugs) * (i + 0.5);
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fillStyle = glow;
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = u * (heavy ? 0.3 : 0.18);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  const gap = heavy ? 0.06 : 0.08;
+  for (let i = 0; i < blocks; i++) {
+    const a0 = ((Math.PI * 2) / blocks) * i + gap;
+    const a1 = ((Math.PI * 2) / blocks) * (i + 1) - gap;
     ctx.beginPath();
-    ctx.moveTo(Math.cos(a) * outer * 0.82, Math.sin(a) * outer * 0.82);
-    ctx.lineTo(Math.cos(a) * outer * 1.02, Math.sin(a) * outer * 1.02);
+    ctx.arc(0, 0, r, a0, a1);
+    ctx.arc(0, 0, r - rim, a1, a0, true);
+    ctx.closePath();
+    ctx.fillStyle = i % 2 === 0 ? COLORS.stone : COLORS.stoneLight;
+    ctx.fill();
+    ctx.strokeStyle = COLORS.stoneEdge;
+    ctx.lineWidth = edge * 0.6;
     ctx.stroke();
   }
-  // ホイール。スポークとナット
-  const rim = heavy ? COLORS.heavyRim : COLORS.lightRim;
+  // 内側の石の面
+  const face = r - rim - u * 0.02;
   ctx.beginPath();
-  ctx.arc(0, 0, inner, 0, Math.PI * 2);
-  ctx.fillStyle = rim;
+  ctx.arc(0, 0, face, 0, Math.PI * 2);
+  ctx.fillStyle = COLORS.stoneDark;
   ctx.fill();
-  ctx.strokeStyle = '#263238';
-  ctx.lineWidth = Math.max(2, u * 0.025);
-  ctx.stroke();
-  const spokes = heavy ? 6 : 5;
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  for (let i = 0; i < spokes; i++) {
-    const a = ((Math.PI * 2) / spokes) * (i + 0.5);
-    ctx.beginPath();
-    ctx.arc(Math.cos(a) * inner * 0.6, Math.sin(a) * inner * 0.6, inner * 0.2, 0, Math.PI * 2);
-    ctx.fill();
+  // 重いタイヤは、面にハブから外輪へ向かうひびが走る
+  if (heavy) {
+    ctx.strokeStyle = COLORS.heat;
+    ctx.lineWidth = Math.max(2, u * 0.04);
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = COLORS.heat;
+    ctx.shadowBlur = u * 0.12;
+    for (let i = 0; i < 4; i++) {
+      const a = (Math.PI / 2) * i + 0.4;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * face * 0.35, Math.sin(a) * face * 0.35);
+      ctx.lineTo(Math.cos(a + 0.35) * face * 0.62, Math.sin(a + 0.35) * face * 0.62);
+      ctx.lineTo(Math.cos(a - 0.1) * face * 0.98, Math.sin(a - 0.1) * face * 0.98);
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
   }
-  ctx.beginPath();
-  ctx.arc(0, 0, inner * 0.28, 0, Math.PI * 2);
-  ctx.fillStyle = '#37474f';
+  // 六角形のハブ。真ん中に小さな光
+  hexPath(ctx, 0, 0, r * 0.32, 1);
+  ctx.fillStyle = COLORS.stone;
   ctx.fill();
+  ctx.strokeStyle = COLORS.stoneEdge;
+  ctx.lineWidth = edge;
+  ctx.stroke();
+  hexPath(ctx, 0, 0, r * 0.12, 1);
+  ctx.fillStyle = glow;
+  ctx.fill();
+  // 全体の輪郭。暗い盤の上で形が読めるように
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.strokeStyle = COLORS.stoneEdge;
+  ctx.lineWidth = edge;
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -621,14 +840,15 @@ function draw(ctx: CanvasRenderingContext2D, state: State, anim: Anim<State, Sho
   const reached = new Set(path.slice(0, Math.floor(progress + 0.5)).map((cell) => keyOf(...cell)));
   const broken = (key: string) => !!anim && (reached.has(key) || blasted.has(key)) && anim.events.state.walls[key] === undefined;
   for (const key of shown.iron) drawIron(ctx, layout, hexOf(key));
-  for (const key of shown.mirrors) drawMirror(ctx, layout, hexOf(key));
+  // 爆弾で壊れる物（爆弾・板・跳ね返す板）は、爆ぜた所で消す
+  for (const key of shown.mirrors) if (!blasted.has(key)) drawMirror(ctx, layout, hexOf(key));
   drawWarps(ctx, layout, shown);
   for (const [key, stage] of Object.entries(shown.walls)) if (!broken(key)) drawWall(ctx, layout, hexOf(key), stage);
-  for (const [key, turn] of Object.entries(shown.plates)) drawPlate(ctx, layout, hexOf(key), turn);
+  for (const [key, turn] of Object.entries(shown.plates)) if (!blasted.has(key)) drawPlate(ctx, layout, hexOf(key), turn);
+  for (const key of shown.bombs) if (!blasted.has(key)) drawBomb(ctx, layout, hexOf(key));
   for (const key of shown.targets) {
     if (passed.has(key) || blasted.has(key)) continue;
     drawTarget(ctx, layout, hexOf(key));
-    if (shown.bombs.includes(key)) drawBombMark(ctx, layout, hexOf(key));
     if (shown.shields.includes(key)) drawShieldMark(ctx, layout, hexOf(key));
   }
   // 爆ぜた所に、広がる火の輪を少しの間だけ描く
@@ -755,9 +975,9 @@ function stuck(state: State): boolean {
 
 export const game: GameDef<State, ShotResult> = {
   // ステージの並びを変えたら番号を上げる（前の並びの星が、別のステージに付いてしまうため）
-  saveKey: 'roller-break.v6',
+  saveKey: 'roller-break.v7',
   title: 'ROLLER BREAK',
-  howto: t('黄色いキャラを操作して、タイヤを転がし、的を全部倒そう。少ない発射数で倒すほど星が増える。', 'Guide the yellow characters, roll tires, and knock down every target. Fewer shots earn more stars.'),
+  howto: t('キャラを操作して、石のタイヤを転がし、的を全部倒そう。少ない発射数で倒すほど星が増える。', 'Guide your characters, roll stone tires, and knock down every target. Fewer shots earn more stars.'),
   view: VIEW,
   levelCount: LEVELS.length,
   rules: RULES,

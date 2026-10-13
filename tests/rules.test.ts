@@ -147,18 +147,36 @@ describe('発射', () => {
     expect(fire(blocked, { roller: 0, dir: EAST, kind: 'light' })!.state.rollers).toEqual(['-2,0', '-1,0']);
   });
 
-  it('爆弾の的が倒れると、周りの的を倒し、壁を1段削る。巻き込んだ爆弾も続けて爆ぜる', () => {
-    // (0,0) の爆弾の隣に (1,-1) の爆弾、その隣に (2,-2) の的。(0,1) の2段の壁は1段になる。(-1,1) の鉄の壁は残る
+  it('爆弾に当たると、タイヤは止まって爆ぜる。周りの的を倒し、壁を1段削り、板と跳ね返す板を壊す。巻き込んだ爆弾も続けて爆ぜる', () => {
+    // (0,0) の爆弾の隣に (1,-1) の爆弾、その隣に (2,-2) の的。(0,1) の2段の壁は1段になる。(-1,1) の鉄の壁は残る。
+    // (1,0) の板と (0,-1) の跳ね返す板は壊れる。(2,0) の的は、どちらの爆弾の隣でもないので残る
     const s = createState(
-      level({ targets: [[0, 0], [1, -1], [2, -2]], bombs: [[0, 0], [1, -1]], walls: [[0, 1, 2]], iron: [[-1, 1]] }),
+      level({
+        targets: [[2, -2], [2, 0]], bombs: [[0, 0], [1, -1]], walls: [[0, 1, 2]], iron: [[-1, 1]],
+        plates: [[1, 0, 1]], mirrors: [[0, -1]], heavy: 1,
+      }),
       9,
     );
-    const result = fire(s, { roller: 0, dir: EAST, kind: 'light' })!;
-    expect(result.end).toBe('target');
-    expect(result.state.status).toBe('cleared');
+    const result = fire(s, { roller: 0, dir: EAST, kind: 'heavy' })!;
+    expect(result.end).toBe('bomb');
+    expect(result.path).toEqual([[-1, 0], [0, 0]]);
+    expect(result.state.targets).toEqual(['2,0']);
+    expect(result.state.bombs).toEqual([]);
     expect(result.state.walls).toEqual({ '0,1': 1 });
+    expect(result.state.plates).toEqual({});
+    expect(result.state.mirrors).toEqual([]);
+    expect(result.state.iron).toEqual(['-1,1']);
     expect(result.blasts).toHaveLength(1);
     expect(result.blasts[0].at).toBe(1);
+  });
+
+  it('爆弾は倒さなくてもクリアできる。転師は爆弾のマスへは押されない', () => {
+    const s = createState(level({ rollers: [[-2, 0], [-1, 0]], targets: [[2, -2]], bombs: [[0, 0]] }), 9);
+    const pushed = fire(s, { roller: 0, dir: EAST, kind: 'light' })!;
+    expect(pushed.state.rollers).toEqual(['-2,0', '-1,0']);
+    const cleared = fire(createState(level({ rollers: [[0, 0]], targets: [[2, -2]], bombs: [[-2, 0]] }), 9), { roller: 0, dir: 1, kind: 'light' })!;
+    expect(cleared.state.status).toBe('cleared');
+    expect(cleared.state.bombs).toEqual(['-2,0']);
   });
 
   it('盾付きの的は、軽いタイヤでは倒れずに止まる。重いタイヤと爆弾では倒れる', () => {
@@ -168,7 +186,7 @@ describe('発射', () => {
     expect(light.changed).toBe(false);
     const heavy = fire(createState(l, 9), { roller: 0, dir: EAST, kind: 'heavy' })!;
     expect(heavy.state.status).toBe('cleared');
-    const bombed = createState(level({ targets: [[-1, 0], [0, 0]], bombs: [[-1, 0]], shields: [[0, 0]] }), 9);
+    const bombed = createState(level({ targets: [[0, 0]], bombs: [[-1, 0]], shields: [[0, 0]] }), 9);
     expect(fire(bombed, { roller: 0, dir: EAST, kind: 'light' })!.state.status).toBe('cleared');
   });
 
@@ -229,10 +247,10 @@ describe('ステージ', () => {
     expect(LEVELS.length).toBe(100);
   });
 
-  it('1つのマスに置く物は1つだけ（転師・的・壁・板・鉄の壁・跳ね返す板・ワープ穴が重ならない）', () => {
+  it('1つのマスに置く物は1つだけ（転師・的・壁・板・鉄の壁・跳ね返す板・爆弾・ワープ穴が重ならない）', () => {
     LEVELS.forEach((l, i) => {
       const cells = [
-        ...l.rollers, ...l.targets, ...l.walls, ...(l.plates ?? []), ...(l.iron ?? []), ...(l.mirrors ?? []),
+        ...l.rollers, ...l.targets, ...l.walls, ...(l.plates ?? []), ...(l.iron ?? []), ...(l.mirrors ?? []), ...(l.bombs ?? []),
         ...(l.warps ?? []).flatMap(([q1, r1, q2, r2]) => [[q1, r1], [q2, r2]]),
       ].map(([q, r]) => `${q},${r}`);
       expect(new Set(cells).size, `ステージ ${i + 1}`).toBe(cells.length);
