@@ -14,7 +14,7 @@ const COLORS = {
   bg: '#0a111b', cell: '#16243a', grid: '#22344f', aim: 'rgba(255,224,130,0.5)',
   wall: '#8d939c', wallLine: '#6c727b', target: '#ff2e4d', targetDark: '#b0132f', targetRing: '#ffd0d8',
   plate: '#26c6da', plateDark: '#123c44',
-  iron: '#2e3440', ironSide: '#14181e', bronze: '#c19a5b', bomb: '#1b1b1b', fuse: '#ffab40', shield: '#4fc3f7',
+  iron: '#2e3440', ironSide: '#14181e', bronze: '#c19a5b', cap: '#5c626b', fuse: '#c9a26b', spark: '#fff3b0', ember: '#ffcf6b', shield: '#4fc3f7',
   mirror: '#e3e9ee', mirrorDark: '#59636e', warps: ['#b388ff', '#ff80ab', '#69f0ae'], hole: '#05080d',
   stone: '#8d939c', stoneLight: '#a7adb5', stoneDark: '#4a4f57', stoneSide: '#30353d', stoneEdge: '#1b1f25', seam: '#4dd0e1', heat: '#ff7a1a',
   roller: '#ffd54f', rollerIdle: '#8d7f58', rollerDark: '#2b2410', skin: '#ffe0b2', select: '#ffe082', tire: '#263238',
@@ -131,8 +131,8 @@ const RULES: RuleEntry[] = [
     from: BOMB_INTRO_AT,
     title: t('爆弾', 'Bombs'),
     text: t(
-      'ひびの光る黒い玉は、爆弾。タイヤが当たると、タイヤはそこで止まり、爆弾が爆ぜる。周りの6マスにある的を倒し、壁を1段削り、板と跳ね返す板を壊す（鉄の壁・ワープ穴・仲間はそのまま）。巻き込まれた爆弾も続けて爆ぜる。爆弾は倒さなくてもクリアできる。使う板を先に使ってから爆ぜさせるなど、爆ぜさせる時を選ぼう。',
-      'A black ball with glowing cracks is a bomb. When a tire hits it, the tire stops and the bomb explodes. It knocks down the targets in the six cells around it, chips one layer off walls, and destroys plates and mirror plates (iron, warp holes and partners are safe). Bombs caught in the blast explode too. You do not have to blow up bombs to clear. Pick the right moment: use a plate first, then blow it away.',
+      '導火線の付いた、熱く光る石の玉は、爆弾。タイヤが当たると、タイヤはそこで止まり、爆弾が爆ぜる。周りの6マスにある的を倒し、壁を1段削り、板と跳ね返す板を壊す（鉄の壁・ワープ穴・仲間はそのまま）。巻き込まれた爆弾も続けて爆ぜる。爆弾は倒さなくてもクリアできる。使う板を先に使ってから爆ぜさせるなど、爆ぜさせる時を選ぼう。',
+      'A stone ball with a glowing core and a lit fuse is a bomb. When a tire hits it, the tire stops and the bomb explodes. It knocks down the targets in the six cells around it, chips one layer off walls, and destroys plates and mirror plates (iron, warp holes and partners are safe). Bombs caught in the blast explode too. You do not have to blow up bombs to clear. Pick the right moment: use a plate first, then blow it away.',
     ),
     demo: demoOf(DEMOS.bomb),
   },
@@ -484,52 +484,76 @@ function drawWarps(ctx: CanvasRenderingContext2D, layout: HexLayout, state: Stat
   }
 }
 
-/** 爆弾。黒い石の玉に、オレンジの熱のひびと、火の付いた導火線。的（赤い結晶）とは別の物として置く */
+/**
+ * 爆弾。地層の筋の入った石の殻に、六角の窓からオレンジの熱の核が見える。上に金属の口金と、火花の付いた導火線。
+ * 的（赤い結晶）とは別の物として置く
+ */
 function drawBomb(ctx: CanvasRenderingContext2D, layout: HexLayout, cell: Hex): void {
-  const { x, y } = centerOf(layout, cell);
+  const { x, y: cy } = centerOf(layout, cell);
   const u = layout.size;
-  const r = u * 0.42;
+  const r = u * 0.4;
+  const y = cy + u * 0.05;
   // 影
   ctx.beginPath();
   ctx.ellipse(x + 2, y + r * 0.85, r * 0.9, r * 0.3, 0, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.fill();
-  glowOn(ctx, COLORS.heat, u * 0.35);
+  // 石の殻と、地層の筋
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fillStyle = COLORS.bomb;
+  ctx.fillStyle = COLORS.stone;
   ctx.fill();
-  glowOff(ctx);
   ctx.strokeStyle = COLORS.stoneEdge;
-  ctx.lineWidth = Math.max(2, u * 0.05);
+  ctx.lineWidth = Math.max(2, u * 0.07);
   ctx.stroke();
-  // 照り
-  ctx.beginPath();
-  ctx.arc(x - r * 0.35, y - r * 0.35, r * 0.22, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.18)';
-  ctx.fill();
-  // 熱のひび
-  glowOn(ctx, COLORS.heat, u * 0.2);
-  ctx.strokeStyle = COLORS.heat;
-  ctx.lineWidth = Math.max(2, u * 0.055);
-  ctx.lineJoin = 'round';
-  for (const [a, b] of [[-2.4, -1.2], [0.2, 1.3], [1.9, 2.9]] as const) {
+  ctx.strokeStyle = COLORS.wallLine;
+  ctx.lineWidth = Math.max(1.5, u * 0.05);
+  for (const dy of [-0.45, 0.45]) {
     ctx.beginPath();
-    ctx.moveTo(x + Math.cos(a) * r * 0.15, y + Math.sin(a) * r * 0.15);
-    ctx.lineTo(x + Math.cos((a + b) / 2) * r * 0.55, y + Math.sin((a + b) / 2) * r * 0.55);
-    ctx.lineTo(x + Math.cos(b) * r * 0.95, y + Math.sin(b) * r * 0.95);
+    ctx.moveTo(x - r * 0.85, y + r * dy);
+    ctx.quadraticCurveTo(x, y + r * dy * 1.25, x + r * 0.85, y + r * dy);
     ctx.stroke();
   }
+  // 熱の核
+  glowOn(ctx, COLORS.heat, u * 0.45);
+  hexPath(ctx, x, y, r, 0.5);
+  ctx.fillStyle = COLORS.heat;
+  ctx.fill();
+  hexPath(ctx, x, y, r, 0.25);
+  ctx.fillStyle = COLORS.ember;
+  ctx.fill();
+  glowOff(ctx);
+  hexPath(ctx, x, y, r, 0.5);
+  ctx.strokeStyle = COLORS.stoneEdge;
+  ctx.lineWidth = Math.max(2, u * 0.06);
+  ctx.stroke();
+  // 口金
+  ctx.save();
+  ctx.translate(x + r * 0.5, y - r * 0.78);
+  ctx.rotate(0.55);
+  ctx.fillStyle = COLORS.cap;
+  ctx.fillRect(-u * 0.12, -u * 0.09, u * 0.24, u * 0.18);
+  ctx.strokeStyle = COLORS.stoneEdge;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(-u * 0.12, -u * 0.09, u * 0.24, u * 0.18);
+  ctx.restore();
   // 導火線と火花
   ctx.strokeStyle = COLORS.fuse;
-  ctx.lineWidth = 3;
+  ctx.lineWidth = Math.max(2, u * 0.07);
+  ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(x + r * 0.5, y - r * 0.8);
-  ctx.quadraticCurveTo(x + r * 0.8, y - r * 1.3, x + r * 1.1, y - r * 1.1);
+  ctx.moveTo(x + r * 0.62, y - r * 0.95);
+  ctx.quadraticCurveTo(x + r * 0.95, y - r * 1.45, x + r * 1.2, y - r * 1.2);
   ctx.stroke();
+  glowOn(ctx, COLORS.spark, u * 0.35);
+  ctx.fillStyle = COLORS.spark;
   ctx.beginPath();
-  ctx.arc(x + r * 1.12, y - r * 1.12, u * 0.1, 0, Math.PI * 2);
-  ctx.fillStyle = COLORS.fuse;
+  for (let i = 0; i < 8; i++) {
+    const a = (Math.PI / 4) * i;
+    const rr = i % 2 ? u * 0.06 : u * 0.16;
+    ctx.lineTo(x + r * 1.22 + Math.cos(a) * rr, y - r * 1.22 + Math.sin(a) * rr);
+  }
+  ctx.closePath();
   ctx.fill();
   glowOff(ctx);
 }
